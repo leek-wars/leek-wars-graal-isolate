@@ -1,0 +1,65 @@
+diff --git a/graal-js/mx.graal-js/mx_graal_js.py b/graal-js/mx.graal-js/mx_graal_js.py
+index d62dd6d2..f29117f1 100644
+--- a/graal-js/mx.graal-js/mx_graal_js.py
++++ b/graal-js/mx.graal-js/mx_graal_js.py
+@@ -524,6 +524,10 @@ def mx_register_dynamic_suite_constituents(register_project, register_distributi
+         meta_pom = [p for p in _suite.dists if p.name == 'JS_POM'][0]
+         additional_artifacts = ['wasm:WASM_POM'] if is_wasm_available() else []
+         additional_language_ids = ['wasm'] if additional_artifacts else []
++        # LW spike: embarquer l'instrument StatementCounter dans l'image isolate
++        if mx.get_env('LW_ISOLATE_INSTRUMENT'):
++            additional_artifacts.append('LW_INSTRUMENT')
++            isolate_build_options = isolate_build_options + ['--initialize-at-build-time=com.leekwars.generator.polyglot']
+         mx_truffle.register_polyglot_isolate_distributions(_suite, register_project, register_distribution,'js',
+                                         'src', meta_pom.name, meta_pom.maven_group_id(), meta_pom.theLicense,
+                                         isolate_build_options=isolate_build_options,
+diff --git a/graal-js/mx.graal-js/suite.py b/graal-js/mx.graal-js/suite.py
+index 21277d9e..d30031aa 100644
+--- a/graal-js/mx.graal-js/suite.py
++++ b/graal-js/mx.graal-js/suite.py
+@@ -100,6 +100,18 @@ suite = {
+   },
+ 
+   "projects" : {
++    # LW spike: instrument StatementCounter a embarquer dans l'image isolate
++    "com.leekwars.truffle.instrument" : {
++      "subDir" : "src",
++      "sourceDirs" : ["src"],
++      "dependencies" : [
++        "truffle:TRUFFLE_API",
++      ],
++      "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
++      "javaCompliance" : "17+",
++      "workingSets" : "Truffle,JavaScript",
++    },
++
+     "com.oracle.truffle.js" : {
+       "subDir" : "src",
+       "sourceDirs" : ["src"],
+@@ -463,6 +475,26 @@ suite = {
+   },
+ 
+   "distributions" : {
++    # LW spike: distribution de l'instrument StatementCounter pour l'image isolate
++    "LW_INSTRUMENT" : {
++      "moduleInfo" : {
++        "name" : "com.leekwars.truffle.instrument",
++        "exports" : [
++          "com.leekwars.generator.polyglot",
++        ],
++      },
++      "subDir" : "src",
++      "dependencies" : [
++        "com.leekwars.truffle.instrument",
++      ],
++      "distDependencies" : [
++        "truffle:TRUFFLE_API",
++      ],
++      "description" : "LeekWars StatementCounter Truffle instrument (spike custom isolate).",
++      "maven" : False,
++      "useModulePath" : True,
++    },
++
+     "GRAALJS" : {
+       "moduleInfo" : {
+         "name" : "org.graalvm.js",

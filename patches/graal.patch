@@ -1,0 +1,32 @@
+diff --git a/sdk/mx.sdk/mx_sdk_toolchain.py b/sdk/mx.sdk/mx_sdk_toolchain.py
+index 5f9fa425..9f6a6ce4 100644
+--- a/sdk/mx.sdk/mx_sdk_toolchain.py
++++ b/sdk/mx.sdk/mx_sdk_toolchain.py
+@@ -97,6 +97,13 @@ class ToolchainTestBuildTask(mx.BuildTask):
+     def build(self):
+         mx_util.ensure_dir_exists(self.subject.get_output_root())
+ 
++        # LW spike: skip the toolchain smoke test on a noexec build partition.
++        # The isolate image is linked with the system toolchain; the LLVM toolchain
++        # test would exec binaries from the noexec mount and abort the build.
++        if os.environ.get('LW_SKIP_TOOLCHAIN_TEST'):
++            mx.log("LW spike: skipping LLVM toolchain smoke test (LW_SKIP_TOOLCHAIN_TEST)")
++            return
++
+         toolchainPath = mx.distribution('LLVM_TOOLCHAIN').output
+         clang = os.path.join(toolchainPath, 'bin', 'clang')
+         clangxx = os.path.join(toolchainPath, 'bin', 'clang++')
+diff --git a/truffle/mx.truffle/mx_truffle.py b/truffle/mx.truffle/mx_truffle.py
+index 464c006b..de3d5327 100644
+--- a/truffle/mx.truffle/mx_truffle.py
++++ b/truffle/mx.truffle/mx_truffle.py
+@@ -2169,7 +2169,8 @@ class PolyglotIsolateProject(mx_sdk_vm_ng.NativeImageLibraryProject):
+         # The polyglot isolate build does not use the --native-images option; it uses its own --polyglot-isolates option.
+         # The parent NativeImageLibraryProject uses mx_sdk_vm_impl._skip_libraries which marks the project as ignored.
+         # We need to remove the ignore flag
+-        delattr(self, "ignore")
++        if hasattr(self, "ignore"):  # LW spike: ignore is only set in --native-images configs
++            delattr(self, "ignore")
+ 
+ 
+ class LibffiBuilderProject(mx_native.MultitargetProject):
