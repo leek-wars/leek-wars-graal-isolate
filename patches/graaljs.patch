@@ -1,8 +1,8 @@
 diff --git a/graal-js/mx.graal-js/mx_graal_js.py b/graal-js/mx.graal-js/mx_graal_js.py
-index d62dd6d2..f29117f1 100644
+index d62dd6d2..e7907a03 100644
 --- a/graal-js/mx.graal-js/mx_graal_js.py
 +++ b/graal-js/mx.graal-js/mx_graal_js.py
-@@ -524,6 +524,10 @@ def mx_register_dynamic_suite_constituents(register_project, register_distributi
+@@ -524,6 +524,17 @@ def mx_register_dynamic_suite_constituents(register_project, register_distributi
          meta_pom = [p for p in _suite.dists if p.name == 'JS_POM'][0]
          additional_artifacts = ['wasm:WASM_POM'] if is_wasm_available() else []
          additional_language_ids = ['wasm'] if additional_artifacts else []
@@ -10,6 +10,13 @@ index d62dd6d2..f29117f1 100644
 +        if mx.get_env('LW_ISOLATE_INSTRUMENT'):
 +            additional_artifacts.append('LW_INSTRUMENT')
 +            isolate_build_options = isolate_build_options + ['--initialize-at-build-time=com.leekwars.generator.polyglot']
++        # LW: image isolate COMBINEE js+python (une seule lib native par JVM cote hote ->
++        # les deux langages coexistent en mode internal : cap RAM par contexte, multi-fichiers
++        # et compteur deterministe pour python aussi). Meme mecanisme que wasm ci-dessus.
++        # Necessite --dy graalpython (suite oracle/graalpython en sibling).
++        if mx.get_env('LW_ISOLATE_PYTHON'):
++            additional_artifacts.append('graalpython:PYTHON_POM')
++            additional_language_ids = additional_language_ids + ['python']
          mx_truffle.register_polyglot_isolate_distributions(_suite, register_project, register_distribution,'js',
                                          'src', meta_pom.name, meta_pom.maven_group_id(), meta_pom.theLicense,
                                          isolate_build_options=isolate_build_options,

@@ -1,5 +1,5 @@
 diff --git a/sdk/mx.sdk/mx_sdk_toolchain.py b/sdk/mx.sdk/mx_sdk_toolchain.py
-index 5f9fa425..9f6a6ce4 100644
+index 5f9fa425a4..9f6a6ce4cc 100644
 --- a/sdk/mx.sdk/mx_sdk_toolchain.py
 +++ b/sdk/mx.sdk/mx_sdk_toolchain.py
 @@ -97,6 +97,13 @@ class ToolchainTestBuildTask(mx.BuildTask):
@@ -17,7 +17,7 @@ index 5f9fa425..9f6a6ce4 100644
          clang = os.path.join(toolchainPath, 'bin', 'clang')
          clangxx = os.path.join(toolchainPath, 'bin', 'clang++')
 diff --git a/truffle/mx.truffle/mx_truffle.py b/truffle/mx.truffle/mx_truffle.py
-index 464c006b..de3d5327 100644
+index 464c006bc0..de3d5327d4 100644
 --- a/truffle/mx.truffle/mx_truffle.py
 +++ b/truffle/mx.truffle/mx_truffle.py
 @@ -2169,7 +2169,8 @@ class PolyglotIsolateProject(mx_sdk_vm_ng.NativeImageLibraryProject):

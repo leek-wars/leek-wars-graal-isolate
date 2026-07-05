@@ -2,7 +2,8 @@
 # Reproduction bout-en-bout de l'image isolate GraalJS custom Leek Wars
 # (StatementCounter embarqué = compteur d'ops déterministe + RAM bornée par contexte).
 #
-# Produit : dist/js-isolate-resources-linux-amd64.jar (~57 Mo)
+# Produit : dist/js-isolate-resources-linux-amd64.jar (~127 Mo, image COMBINEE js+python,
+# remplace les artefacts js-isolate ET python-isolate officiels)
 # (remplace org.graalvm.polyglot:js-isolate-linux-amd64-community:$GRAAL_VERSION)
 #
 # Prérequis : linux-amd64, ~20 Go de disque sur un FS **exécutable** (pas de noexec),
@@ -14,11 +15,13 @@ cd "$(dirname "$0")"
 
 ### Pins de version — à mettre à jour ENSEMBLE lors d'un bump GraalVM (voir README)
 GRAAL_VERSION=25.1.3
-# Commit de oracle/graal épinglé par la suite graaljs (suite.py "suites"->regex->version),
-# PAS le tag graal-25.1.3 (légèrement postérieur).
-GRAAL_COMMIT=5b1416573a60f8a4d8aa6ba33df9acdbe8d5d8cc
+# Commit de oracle/graal épinglé par la suite graalPYTHON (mx.graalpython/suite.py ->
+# regex -> version) : le plus récent des deux pins graaljs/graalpython (même ligne 25.1,
+# graaljs tolère un graal plus récent, l'inverse est risqué).
+GRAAL_COMMIT=2143cd9f4e3c06b5518d1cbd23c09a918bc9cb58
 GRAALJS_TAG=graal-25.1.3
-MX_VERSION=7.82.2          # graal/common.json "mx_version"
+GRAALPYTHON_TAG=graal-25.1.3
+MX_VERSION=7.83.0          # exigé par la suite graalpython (>= common.json)
 JDK_ID=labsjdk-ce-latest   # résolu via graal/common.json
 # Dev-build officiel de la MÊME ligne (repo graalvm/graalvm-ce-dev-builds) : sert de
 # BOOTSTRAP_GRAALVM (son native-image comprend les options SVM 25.1) et évite de
@@ -45,6 +48,10 @@ if [ ! -d "$WORK/graaljs" ]; then
     git clone --depth 1 --branch "$GRAALJS_TAG" https://github.com/oracle/graaljs.git "$WORK/graaljs"
 fi
 git -C "$WORK/graaljs" checkout -q "$GRAALJS_TAG"
+if [ ! -d "$WORK/graalpython" ]; then
+    git clone --depth 1 --branch "$GRAALPYTHON_TAG" https://github.com/oracle/graalpython.git "$WORK/graalpython"
+fi
+git -C "$WORK/graalpython" checkout -q "$GRAALPYTHON_TAG"
 
 ### 2. Patches + source de l'instrument
 step "Application des patches"
@@ -75,17 +82,21 @@ export BOOTSTRAP_GRAALVM="$WORK/bootstrap"
 step "mx build (POLYGLOT_ISOLATES=js, LW_ISOLATE_INSTRUMENT=1)"
 export POLYGLOT_ISOLATES=js
 export LW_ISOLATE_INSTRUMENT=1
+export LW_ISOLATE_PYTHON=1        # image COMBINEE js+python (une seule lib native)
 export GENERATE_DEBUGINFO=false   # pas de debug info dans la .so
 # LW_SKIP_TOOLCHAIN_TEST=1 : seulement si le FS de build est noexec (voir README)
-bash "$WORK/mx/mx" -p "$WORK/graaljs/graal-js" --dy /substratevm build \
+# --version-conflict-resolution ignore : graaljs et graalpython epinglent deux commits
+# graal proches mais differents de la meme ligne ; on construit sur le pin graalpython.
+bash "$WORK/mx/mx" -p "$WORK/graaljs/graal-js" --dy /substratevm,graalpython \
+    --version-conflict-resolution ignore build \
     --dependencies graal-js:JS_ISOLATE_RESOURCES_LINUX_AMD64
 
 ### 5. Artefact + validation Gate2
 step "Artefact + validation"
 JAR="$WORK/graaljs/graal-js/mxbuild/linux-amd64/dists/jdk17/js-isolate-resources-linux-amd64.jar"
 cp "$JAR" dist/
-bash "$WORK/mx/mx" -p "$WORK/graaljs/graal-js" --dy /substratevm classpath graal-js:JS_ISOLATE_LINUX_AMD64 \
-    | tail -1 > "$WORK/host-classpath.txt"
+bash "$WORK/mx/mx" -p "$WORK/graaljs/graal-js" --dy /substratevm,graalpython --version-conflict-resolution ignore \
+    classpath graal-js:JS_ISOLATE_LINUX_AMD64 | tail -1 > "$WORK/host-classpath.txt"
 CP="$(cat "$WORK/host-classpath.txt"):$WORK/graaljs/graal-js/mxbuild/dists/lw-instrument.jar"
 mkdir -p "$WORK/harness-out"
 "$JAVA_HOME/bin/javac" -cp "$CP" -d "$WORK/harness-out" scripts/Gate2.java
