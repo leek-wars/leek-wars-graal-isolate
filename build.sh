@@ -23,10 +23,12 @@ GRAALJS_TAG=graal-25.1.3
 GRAALPYTHON_TAG=graal-25.1.3
 MX_VERSION=7.83.0          # exigé par la suite graalpython (>= common.json)
 JDK_ID=labsjdk-ce-latest   # résolu via graal/common.json
-# Dev-build officiel de la MÊME ligne (repo graalvm/graalvm-ce-dev-builds) : sert de
-# BOOTSTRAP_GRAALVM (son native-image comprend les options SVM 25.1) et évite de
-# construire le stage1 GraalVM localement.
-BOOTSTRAP_TAG=25.1.3-dev-20260621_0111
+# Release STABLE de la MÊME ligne (repo graalvm/graalvm-ce-builds) : sert de
+# BOOTSTRAP_GRAALVM (son native-image doit être de la ligne 25.1 : un builder 25.2+
+# échoue l'assertion de version TruffleAPIFeature) et évite de construire le stage1
+# GraalVM localement. NE PAS reprendre un nightly de graalvm-ce-dev-builds : ils sont
+# purgés au fil de l'eau (le pin 25.1.3-dev-20260621 est devenu 404).
+BOOTSTRAP_URL="https://github.com/graalvm/graalvm-ce-builds/releases/download/graal-25.1.3/graalvm-community-jdk-25i1-25.0.3_linux-x64_bin.tar.gz"
 
 WORK=${WORK:-$PWD/work}
 mkdir -p "$WORK" dist
@@ -61,7 +63,7 @@ rm -rf "$WORK/graaljs/graal-js/src/com.leekwars.truffle.instrument"
 cp -r "$PWD/src/com.leekwars.truffle.instrument" "$WORK/graaljs/graal-js/src/"
 
 ### 3. JDKs
-step "JDK de build ($JDK_ID) + bootstrap GraalVM ($BOOTSTRAP_TAG)"
+step "JDK de build ($JDK_ID) + bootstrap GraalVM (graal-25.1.3 stable)"
 if [ ! -d "$WORK/jdks" ] || ! ls -d "$WORK"/jdks/labsjdk-* >/dev/null; then
     bash "$WORK/mx/mx" fetch-jdk --jdk-id "$JDK_ID" \
         --configuration "$WORK/graal/common.json" --to "$WORK/jdks"
@@ -69,8 +71,7 @@ fi
 JAVA_HOME=$(ls -d "$WORK"/jdks/labsjdk-*_amd64 | sort | tail -1)
 export JAVA_HOME
 if [ ! -d "$WORK/bootstrap" ]; then
-    curl -fsSL -o "$WORK/bootstrap.tar.gz" \
-        "https://github.com/graalvm/graalvm-ce-dev-builds/releases/download/$BOOTSTRAP_TAG/graalvm-community-dev-linux-amd64.tar.gz"
+    curl -fsSL -o "$WORK/bootstrap.tar.gz" "$BOOTSTRAP_URL"
     mkdir -p "$WORK/bootstrap"
     tar -xzf "$WORK/bootstrap.tar.gz" -C "$WORK/bootstrap" --strip-components=1
     rm "$WORK/bootstrap.tar.gz"

@@ -30,12 +30,19 @@ répertoire de travail. Il finit par exécuter le harnais `scripts/Gate2.java` :
 
 ### Si le FS de build est noexec (ex : /media/hdd)
 
-Trois composants veulent exécuter des binaires depuis l'arbre de build :
+`scripts/build-noexec-hdd.sh` automatise tout ça (WORK sur le HDD, composants exécutables
+relocalisés vers `~/.cache/lw-graal-isolate-exec` + symlinks). Composants qui veulent
+exécuter des binaires depuis l'arbre de build :
 - `libffi` (script `configure`) → symlinker `work/graal/truffle/mxbuild/linux-amd64/libffi`
   vers un FS exécutable ;
 - le smoke test du toolchain LLVM → `export LW_SKIP_TOOLCHAIN_TEST=1` (hook posé par
   `patches/graal.patch`) ;
-- le stage1 GraalVM/jimage → déjà évité par `BOOTSTRAP_GRAALVM` (le script le fait toujours).
+- le stage1 GraalVM/jimage → déjà évité par `BOOTSTRAP_GRAALVM` (le script le fait toujours) ;
+- les JDKs (`work/jdks`, `work/bootstrap`) → symlinker vers un FS exécutable ;
+- les outils téléchargés par mx dans `mx-cache` (`NINJA_*`, `MUSL_GCC_TOOLCHAIN_*`) →
+  relocaliser + symlink ;
+- le `LLVM_TOOLCHAIN` extrait dans `work/graal/sdk/mxbuild/linux-amd64` (clang++ du
+  launcher nativebridge, PAS couvert par LW_SKIP_TOOLCHAIN_TEST) → relocaliser + symlink.
 
 ## Contenu
 
