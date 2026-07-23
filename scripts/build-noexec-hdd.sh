@@ -1,28 +1,29 @@
 #!/bin/bash
 # Wrapper build graal-isolate sur /media/hdd (noexec) : deporte WORK sur le HDD et
-# symlinke les composants qui doivent EXECUTER des binaires (jdks, bootstrap, libffi)
-# vers un FS executable (/home). Cf README graal-isolate "Si le FS de build est noexec".
+# symlinke les composants qui doivent EXECUTER des binaires (jdks, bootstrap, ninja,
+# musl, LLVM, libffi) vers un FS executable (/home). Cf README "Si le FS de build est
+# noexec". Idempotent : re-runnable apres un echec, y compris apres un wipe de WORK
+# qui conserve le cache executable.
 set -euo pipefail
 
-REPO=/home/pierre/dev/leek-wars/graal-isolate
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 export WORK=/media/hdd/lw-graal-isolate-work
 EXEC_BASE=/home/pierre/.cache/lw-graal-isolate-exec
-# 25.1.3-dev purge des nightlies (404) : on prend le 25.2.4-dev le plus proche, son
-# native-image doit juste comprendre les options SVM de la ligne 25.1.
-# Nightly 25.1.3-dev purge (404) et un bootstrap 25.2.x echoue l'assertion TruffleAPIFeature :
-# release STABLE de la meme ligne = "GraalVM Community 25 Innovation 1" (graal 25.1.3, jdk 25.0.3).
-BOOTSTRAP_URL="https://github.com/graalvm/graalvm-ce-builds/releases/download/graal-25.1.3/graalvm-community-jdk-25i1-25.0.3_linux-x64_bin.tar.gz"
-GRAALJS_TAG=graal-25.1.3
-GRAAL_COMMIT=2143cd9f4e3c06b5518d1cbd23c09a918bc9cb58
+
+# Pins UNIQUES : lus depuis build.sh (source de verite), pas de copie qui driftera au
+# prochain bump GraalVM.
+eval "$(grep -E '^(BOOTSTRAP_URL|GRAALJS_TAG|GRAAL_COMMIT)=' "$REPO/build.sh")"
 
 mkdir -p "$WORK" "$EXEC_BASE/jdks" "$EXEC_BASE/bootstrap" "$EXEC_BASE/libffi"
 
 # jdks : symlink (cible vide -> le ls de build.sh echoue -> fetch-jdk ecrit a travers le lien)
 ln -sfn "$EXEC_BASE/jdks" "$WORK/jdks"
 
-# bootstrap : build.sh saute le download si -d passe -> on pre-telecharge ici
-if ! "$EXEC_BASE/bootstrap/bin/native-image" --version 2>/dev/null | grep -q "^native-image 25\.1\.3"; then
-    echo "=== Pre-download bootstrap GraalVM Community 25 Innovation 1 (graal 25.1.3) ==="
+# bootstrap : build.sh saute le download si -d passe -> on pre-telecharge ici. La version
+# graal est sur la ligne "GraalVM CE x.y.z" (la 1re ligne affiche la version JDK, 25.0.x).
+BOOTSTRAP_GRAAL_VERSION="$(echo "$BOOTSTRAP_URL" | grep -oE 'graal-[0-9.]+' | head -1 | cut -d- -f2)"
+if ! "$EXEC_BASE/bootstrap/bin/native-image" --version 2>/dev/null | grep -q "GraalVM CE ${BOOTSTRAP_GRAAL_VERSION//./\\.}"; then
+    echo "=== Pre-download bootstrap GraalVM stable (graal $BOOTSTRAP_GRAAL_VERSION) ==="
     rm -rf "$EXEC_BASE/bootstrap"; mkdir -p "$EXEC_BASE/bootstrap"
     curl -fsSL -o "$WORK/bootstrap.tar.gz" "$BOOTSTRAP_URL"
     tar -xzf "$WORK/bootstrap.tar.gz" -C "$EXEC_BASE/bootstrap" --strip-components=1
@@ -39,18 +40,25 @@ fi
 mkdir -p "$WORK/graal/truffle/mxbuild/linux-amd64"
 ln -sfn "$EXEC_BASE/libffi" "$WORK/graal/truffle/mxbuild/linux-amd64/libffi"
 
-# mx telecharge des OUTILS EXECUTABLES (ninja...) dans mx-cache (noexec ici) :
-# relocaliser vers le FS executable + symlink. A refaire si un nouvel outil apparait.
+# mx telecharge des OUTILS EXECUTABLES (ninja, toolchain musl...) dans mx-cache (noexec
+# ici) : relocaliser vers le FS executable + symlink. Si la destination existe deja
+# (re-run apres wipe de WORK), on jette la copie fraiche et on symlinke l'existante
+# (contenu identique : le nom contient le sha256).
 mkdir -p "$EXEC_BASE/mx-tools"
 for d in "$WORK"/mx-cache/NINJA_* "$WORK"/mx-cache/MUSL_GCC_TOOLCHAIN_*; do
     [ -e "$d" ] && [ ! -L "$d" ] || continue
-    mv "$d" "$EXEC_BASE/mx-tools/" && ln -s "$EXEC_BASE/mx-tools/$(basename "$d")" "$d"
+    dest="$EXEC_BASE/mx-tools/$(basename "$d")"
+    if [ -e "$dest" ]; then rm -rf "$d"; else mv "$d" "$dest"; fi
+    ln -s "$dest" "$d"
 done
 
-# LLVM_TOOLCHAIN (clang++ du build nativebridge launcher) : extrait dans graal/sdk/mxbuild,
-# doit lui aussi vivre sur un FS executable.
+# LLVM_TOOLCHAIN (clang++ du build nativebridge launcher, PAS couvert par
+# LW_SKIP_TOOLCHAIN_TEST) : extrait dans graal/sdk/mxbuild, doit lui aussi vivre sur un
+# FS executable. rm -rf de la destination avant mv, sinon un re-run imbriquerait le
+# toolchain frais DANS l'ancien et le symlink pointerait sur du perime.
 LLVM_DIR="$WORK/graal/sdk/mxbuild/linux-amd64/LLVM_TOOLCHAIN"
 if [ -d "$LLVM_DIR" ] && [ ! -L "$LLVM_DIR" ]; then
+    rm -rf "$EXEC_BASE/LLVM_TOOLCHAIN"
     mv "$LLVM_DIR" "$EXEC_BASE/LLVM_TOOLCHAIN" && ln -s "$EXEC_BASE/LLVM_TOOLCHAIN" "$LLVM_DIR"
 fi
 
