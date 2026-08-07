@@ -1,0 +1,85 @@
+name: Build & release isolate
+
+# L'image isolate combinée js+python (native-image GraalVM) est LOURDE à construire :
+# ~20 Go de disque sur un FS exécutable, ~8 Go de RAM, 15-30 min. Elle ne se rebuild
+# qu'aux bumps GraalVM ou aux évolutions de l'instrument -> pas de build à chaque push.
+#
+# - push (build.sh / patches / src / scripts) : BUILD + VALIDE Gate2, sans release
+#   (garde-anti-régression : on sait tout de suite si un patch casse le déterminisme).
+# - workflow_dispatch : BUILD + VALIDE puis PUBLIE le jar en release (tag paramétrable).
+#
+# Prérequis runner : un self-hosted labellisé "graal-isolate" sur linux-amd64 avec
+# build-essential + zlib1g-dev + python3 + git + curl, ~20 Go de disque EXÉCUTABLE
+# (pas de noexec) et ~8 Go de RAM. Cf. README.
+
+on:
+  push:
+    paths:
+      - 'build.sh'
+      - 'patches/**'
+      - 'src/**'
+      - 'scripts/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag de release (ex: v25.1.3-combined-3)'
+        required: true
+      name:
+        description: 'Titre de la release'
+        required: false
+        default: ''
+      prerelease:
+        description: 'Marquer comme pre-release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: [self-hosted, graal-isolate]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image isolate (build.sh) + Gate2
+        run: |
+          set -o pipefail
+          ./build.sh 2>&1 | tee build.log
+
+      - name: Valider Gate2 (binding présent + déterminisme)
+        run: |
+          # build.sh n'échoue PAS sur un Gate2 logiquement KO (le harnais imprime
+          # "-> KO" mais sort en 0) : on grep les marqueurs de succès nous-mêmes.
+          grep -q '\[2\] OK' build.log || { echo "::error::Gate2 [2] KO : binding StatementCounter absent"; exit 1; }
+          grep -q -- '-> DETERMINISTE' build.log || { echo "::error::Gate2 [3] KO : compute non déterministe"; exit 1; }
+          test -f dist/js-isolate-resources-linux-amd64.jar || { echo "::error::jar absent"; exit 1; }
+          echo "Gate2 OK, jar présent ($(du -h dist/js-isolate-resources-linux-amd64.jar | cut -f1))."
+
+      - name: Uploader le jar comme artefact de build
+        uses: actions/upload-artifact@v4
+        with:
+          name: js-isolate-resources-linux-amd64
+          path: dist/js-isolate-resources-linux-amd64.jar
+          retention-days: 14
+
+      - name: Publier la release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag }}
+          NAME: ${{ github.event.inputs.name }}
+          PRERELEASE: ${{ github.event.inputs.prerelease }}
+        run: |
+          JAR=dist/js-isolate-resources-linux-amd64.jar
+          TITLE="${NAME:-$TAG}"
+          NOTES="Image isolate combinée js+python (GraalVM $(grep -m1 '^GRAAL_VERSION=' build.sh | cut -d= -f2)), instrument StatementCounter embarqué. Gate2 validé (déterminisme vérifié en CI). Construite depuis build.sh sur ce commit (${GITHUB_SHA})."
+          PRE=""
+          [ "$PRERELEASE" = "true" ] && PRE="--prerelease"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$JAR" --clobber
+          else
+            gh release create "$TAG" "$JAR" --title "$TITLE" --notes "$NOTES" $PRE
+          fi
+          echo "Release $TAG publiée."

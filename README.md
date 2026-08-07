@@ -16,11 +16,29 @@ Tout est open source (variantes `-community`, MIT/UPL) : pas de fork de dépôt,
 petits patches de la config de build mx + une classe Java, réappliqués sur les sources
 officielles épinglées.
 
-## Reproduire
+## Télécharger (sans builder)
+
+Le jar est publié en **release publique** — inutile de refaire le build lourd :
+
+```bash
+curl -fsSL -o js-isolate-resources-linux-amd64.jar \
+  https://github.com/leek-wars/leek-wars-graal-isolate/releases/download/v25.1.3-combined-2/js-isolate-resources-linux-amd64.jar
+```
+
+C'est ce que fait la CI du générateur, et ce dont un joueur a besoin pour tester une IA
+JS/Python en local (le placer dans `generator/libs/`).
+
+## Reproduire (builder soi-même)
 
 ```bash
 ./build.sh          # produit dist/js-isolate-resources-linux-amd64.jar (~127 Mo, js+python)
 ```
+
+> La CI (`.github/workflows/build.yml`) fait exactement ça sur un runner self-hosted
+> labellisé `graal-isolate` : sur `workflow_dispatch` elle build, **valide Gate2**
+> (`[2] OK` + `-> DETERMINISTE`, greppés car le harnais sort en 0 même sur un KO) et
+> **publie le jar en release** (tag paramétrable). Un `push` touchant `build.sh`/`patches`/
+> `src`/`scripts` rejoue build+Gate2 sans release (garde anti-régression).
 
 Prérequis : linux-amd64, ~20 Go de disque sur un FS **exécutable**, build-essential +
 zlib1g-dev, python3, git, curl, ~8 Go de RAM. Durée ~15-30 min (image native ~5 min / 24 cœurs).
@@ -92,7 +110,7 @@ exécuter des binaires depuis l'arbre de build :
 ## Intégration generator / worker
 
 - L'artefact `dist/js-isolate-resources-linux-amd64.jar` est copié dans le repo generator
-  (branche polyglot, privé) sous `libs/` et remplace les DEUX dépendances Maven
+  (public, `leek-wars/leek-wars-generator`) sous `libs/` et remplace les DEUX dépendances Maven
   `org.graalvm.polyglot:{js,python}-isolate-linux-amd64-community` dans `build.gradle`
   (l'uber-jar worker y gagne ~80 Mo).
 - `PolyglotSandbox` pose `.option("lw-statement-counter", "true")` sur l'engine isolate JS et
