@@ -2,24 +2,18 @@ name: Build & release isolate
 
 # L'image isolate combinée js+python (native-image GraalVM) est LOURDE à construire :
 # ~20 Go de disque sur un FS exécutable, ~8 Go de RAM, 15-30 min. Elle ne se rebuild
-# qu'aux bumps GraalVM ou aux évolutions de l'instrument -> pas de build à chaque push.
+# qu'aux bumps GraalVM ou aux évolutions de l'instrument -> build MANUEL uniquement.
 #
-# - push (build.sh / patches / src / scripts) : BUILD + VALIDE Gate2, sans release
-#   (garde-anti-régression : on sait tout de suite si un patch casse le déterminisme).
-# - workflow_dispatch : BUILD + VALIDE puis PUBLIE le jar en release (tag paramétrable).
+# Déclenchement en workflow_dispatch seul (pas de trigger `push` : tant qu'aucun runner
+# self-hosted `graal-isolate` n'est rattaché, un push créerait un run bloqué en queue).
+# Le workflow BUILD + VALIDE Gate2 puis PUBLIE le jar en release (tag paramétrable).
 #
 # Prérequis runner : un self-hosted labellisé "graal-isolate" sur linux-amd64 avec
 # build-essential + zlib1g-dev + python3 + git + curl, ~20 Go de disque EXÉCUTABLE
-# (pas de noexec) et ~8 Go de RAM. Cf. README.
+# (pas de noexec) et ~8 Go de RAM. Cf. README. Sans runner, builder en local
+# (`./build.sh`) puis `gh release create` — la CI n'est qu'une commodité.
 
 on:
-  push:
-    paths:
-      - 'build.sh'
-      - 'patches/**'
-      - 'src/**'
-      - 'scripts/**'
-      - '.github/workflows/build.yml'
   workflow_dispatch:
     inputs:
       tag:

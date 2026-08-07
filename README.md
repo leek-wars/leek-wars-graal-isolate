@@ -35,10 +35,10 @@ JS/Python en local (le placer dans `generator/libs/`).
 ```
 
 > La CI (`.github/workflows/build.yml`) fait exactement ça sur un runner self-hosted
-> labellisé `graal-isolate` : sur `workflow_dispatch` elle build, **valide Gate2**
-> (`[2] OK` + `-> DETERMINISTE`, greppés car le harnais sort en 0 même sur un KO) et
-> **publie le jar en release** (tag paramétrable). Un `push` touchant `build.sh`/`patches`/
-> `src`/`scripts` rejoue build+Gate2 sans release (garde anti-régression).
+> labellisé `graal-isolate`, en **`workflow_dispatch` uniquement** (build manuel) : elle
+> build, **valide Gate2** (`[2] OK` + `-> DETERMINISTE`, greppés car le harnais sort en 0
+> même sur un KO) et **publie le jar en release** (tag paramétrable). Sans runner rattaché,
+> builder en local puis `gh release create`.
 
 Prérequis : linux-amd64, ~20 Go de disque sur un FS **exécutable**, build-essential +
 zlib1g-dev, python3, git, curl, ~8 Go de RAM. Durée ~15-30 min (image native ~5 min / 24 cœurs).
