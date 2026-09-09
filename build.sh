@@ -59,6 +59,9 @@ git -C "$WORK/graalpython" checkout -q "$GRAALPYTHON_TAG"
 step "Application des patches"
 git -C "$WORK/graal" checkout -q -- . && git -C "$WORK/graal" apply "$PWD/patches/graal.patch"
 git -C "$WORK/graaljs" checkout -q -- . && git -C "$WORK/graaljs" apply "$PWD/patches/graaljs.patch"
+# Comptage des operations Python par EXPRESSION (Tag(Expression) sur les operateurs, appels,
+# acces, litteraux, iterations de comprehension) : GraalPy ne tague que les statements.
+git -C "$WORK/graalpython" checkout -q -- . && git -C "$WORK/graalpython" apply "$PWD/patches/graalpython.patch"
 rm -rf "$WORK/graaljs/graal-js/src/com.leekwars.truffle.instrument"
 cp -r "$PWD/src/com.leekwars.truffle.instrument" "$WORK/graaljs/graal-js/src/"
 

@@ -1,0 +1,97 @@
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java
+index 00eafcd..c0ae9fc 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java
+@@ -70,6 +70,7 @@ import java.io.DataOutputStream;
+ import java.io.IOException;
+ import java.io.PrintWriter;
+ import java.io.StringWriter;
++import java.util.ArrayDeque;
+ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.EnumSet;
+@@ -156,6 +157,7 @@ import com.oracle.truffle.api.bytecode.BytecodeParser;
+ import com.oracle.truffle.api.bytecode.BytecodeRootNodes;
+ import com.oracle.truffle.api.bytecode.serialization.BytecodeSerializer;
+ import com.oracle.truffle.api.debug.DebuggerTags;
++import com.oracle.truffle.api.instrumentation.StandardTags.ExpressionTag;
+ import com.oracle.truffle.api.instrumentation.StandardTags.StatementTag;
+ import com.oracle.truffle.api.strings.TruffleString;
+ 
+@@ -788,19 +790,46 @@ public final class RootNodeCompiler implements BaseBytecodeDSLVisitor<BytecodeDS
+      * corresponding {@link #endSourceSection} call to ensure the Tag is closed.
+      */
+     boolean beginSourceSection(SSTNode node, Builder b) {
+-        return beginSourceSection(node.getSourceRange(), b);
++        // Leek Wars: every statement node opens a Tag(Statement), even on the same line as its
++        // parent (one-line `if x: y = 1`, `for i in r: s += i`), so that the operation counter sees
++        // one event per statement EXECUTED whatever the source layout.
++        boolean newStatement = lwBeginSourceSection(node.getSourceRange(), b, node instanceof StmtTy);
++        // Leek Wars: every expression node (operators, calls, attribute/subscript access, names,
++        // constants, literals, comprehensions...) opens a Tag(Expression), like GraalJS does, so
++        // that both languages are counted with the same granularity ("1 event per node executed").
++        boolean expression = !newStatement && lwCountsAsExpression(node);
++        if (expression) {
++            b.beginTag(ExpressionTag.class);
++            b.beginBlock();
++        }
++        lwExpressionTags.push(expression);
++        return newStatement;
+     }
+ 
+     /**
+      * {@link #beginSourceSection(SSTNode, Builder)}
+      */
+     boolean beginSourceSection(SourceRange sourceRange, Builder b) {
++        boolean newStatement = lwBeginSourceSection(sourceRange, b, false);
++        lwExpressionTags.push(false);
++        return newStatement;
++    }
++
++    // Leek Wars: whether the matching endSourceSection must close a Tag(Expression). Stack rather
++    // than a wider return type: the boolean result is threaded through ~70 call sites.
++    private final ArrayDeque<Boolean> lwExpressionTags = new ArrayDeque<>();
++
++    private static boolean lwCountsAsExpression(SSTNode node) {
++        return node instanceof ExprTy;
++    }
++
++    private boolean lwBeginSourceSection(SourceRange sourceRange, Builder b, boolean forceStatement) {
+         SourceRange oldSourceRange = this.currentLocation;
+         this.currentLocation = sourceRange;
+ 
+         beginSourceSectionInner(b, sourceRange);
+ 
+-        if (oldSourceRange == null || oldSourceRange.startLine != sourceRange.startLine) {
++        if (forceStatement || oldSourceRange == null || oldSourceRange.startLine != sourceRange.startLine) {
+             b.beginTag(StatementTag.class);
+             b.beginBlock();
+             return true;
+@@ -858,6 +887,10 @@ public final class RootNodeCompiler implements BaseBytecodeDSLVisitor<BytecodeDS
+     }
+ 
+     void endSourceSection(Builder b, boolean closeTag) {
++        if (lwExpressionTags.pop()) {
++            b.endBlock();
++            b.endTag(ExpressionTag.class);
++        }
+         if (closeTag) {
+             b.endBlock();
+             b.endTag(StatementTag.class);
+@@ -1277,12 +1310,16 @@ public final class RootNodeCompiler implements BaseBytecodeDSLVisitor<BytecodeDS
+             b.endForIterate();
+             b.endBlock();
+ 
++            // Leek Wars: one Tag(Expression) per iteration, so that `[x for x in big]` is billed
++            // per element like the explicit loop, not once for the whole comprehension.
++            b.beginTag(ExpressionTag.class);
+             b.beginBlock();
+ 
+             comp.target.accept(statementCompiler.new StoreVisitor(() -> b.emitLoadLocal(localValue)));
+             emitComprehensionBody(generators, index, type, collectionLocal, accumulateProducer, statementCompiler);
+ 
+             b.endBlock();
++            b.endTag(ExpressionTag.class);
+             b.endWhile();
+ 
+             endTemporaryLocal(localIter, b);

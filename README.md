@@ -72,6 +72,14 @@ exécuter des binaires depuis l'arbre de build :
   l'ajoute aux `additional_image_path_artifacts` de l'image isolate +
   `--initialize-at-build-time=com.leekwars.generator.polyglot` ; gaté `LW_ISOLATE_PYTHON=1`,
   ajoute `graalpython:PYTHON_POM` + `additional_language_ids=['python']` (image combinée).
+- `patches/graalpython.patch` — comptage des opérations Python par EXPRESSION : le compilateur
+  Bytecode DSL de GraalPy (`RootNodeCompiler`) n'émet que `Tag(Statement)`, et seulement au
+  changement de ligne (une ligne = un événement, compréhensions et boucles sur une ligne
+  gratuites). Le patch ouvre un `Tag(Expression)` sur chaque nœud d'expression exécuté
+  (opérateurs, appels, attributs, indices, noms, constantes, littéraux, lambdas, compréhensions),
+  comme GraalJS, plus un par itération de compréhension, et un `Tag(Statement)` par statement
+  même sur la ligne de son parent. L'instrument compte statements + expressions pour tous les
+  langages.
 - `src/com.leekwars.truffle.instrument/` — l'instrument (copié dans l'arbre graaljs au build).
 - `scripts/Gate2.java` — harnais de validation (instrument listé, binding lisible,
   déterminisme, coûts).
