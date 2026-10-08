@@ -1,3 +1,16 @@
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/code/PCode.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/code/PCode.java
+index 084f871..ee6ef2c 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/code/PCode.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/code/PCode.java
+@@ -480,7 +480,7 @@ public final class PCode extends PythonBuiltinObject {
+     private PCode createCode(BytecodeDSLCodeUnit codeUnit) {
+         PBytecodeDSLRootNode outerRootNode = (PBytecodeDSLRootNode) getRootNodeForExtraction();
+         PythonLanguage language = outerRootNode.getLanguage();
+-        PBytecodeDSLRootNode rN = language.createCachedRootNode(l -> codeUnit.createRootNode(l, outerRootNode.isInternal()), codeUnit);
++        PBytecodeDSLRootNode rN = outerRootNode.getOrCreateChildRootNode(codeUnit);
+         return PFactory.createCode(language, rN, rN.getSignature(), codeUnit, getFilename());
+     }
+ 
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java
 index 00eafcd..c0ae9fc 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java
@@ -95,3 +108,53 @@ index 00eafcd..c0ae9fc 100644
              b.endWhile();
  
              endTemporaryLocal(localIter, b);
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java
+index f9fc7cb..a11cda0 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java
+@@ -58,7 +58,9 @@ import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
+ import static com.oracle.truffle.api.CompilerDirectives.shouldNotReachHere;
+ 
+ import java.math.BigInteger;
++import java.util.HashMap;
+ import java.util.Iterator;
++import java.util.Map;
+ import java.util.Set;
+ import java.util.concurrent.atomic.AtomicReference;
+ 
+@@ -423,6 +425,8 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
+     @CompilationFinal protected transient int maxProfileCEventStackSize;
+     @CompilationFinal(dimensions = 1) protected transient Assumption[] cellEffectivelyFinalAssumptions;
+ 
++    private transient Map<BytecodeDSLCodeUnit, PBytecodeDSLRootNode> childRootNodes;
++
+     /*
+      * We don't want to store the assumption in MakeFunction node to be able to have an uncached version of it.
+      * So we put it into the root of the function that MakeFunction is creating.
+@@ -459,10 +463,9 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
+     @TruffleBoundary
+     protected void prepareForInstrumentation(Set<Class<?>> materializedTags) {
+         super.prepareForInstrumentation(materializedTags);
+-        PythonLanguage language = getLanguage();
+         for (Object constant : co.constants) {
+             if (constant instanceof BytecodeDSLCodeUnit codeUnit) {
+-                PBytecodeDSLRootNode rootNode = language.createCachedRootNode(l -> codeUnit.createRootNode(l, isInternal()), codeUnit);
++                PBytecodeDSLRootNode rootNode = getOrCreateChildRootNode(codeUnit);
+                 rootNode.getCallTarget();
+             }
+         }
+@@ -472,6 +475,14 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
+         return getLanguage(PythonLanguage.class);
+     }
+ 
++    @TruffleBoundary
++    public final synchronized PBytecodeDSLRootNode getOrCreateChildRootNode(BytecodeDSLCodeUnit codeUnit) {
++        if (childRootNodes == null) {
++            childRootNodes = new HashMap<>();
++        }
++        return childRootNodes.computeIfAbsent(codeUnit, unit -> unit.createRootNode(getLanguage(), isInternal()));
++    }
++
+     public void setMetadata(BytecodeDSLCodeUnit co, ParserCallbacksImpl parserErrorCallback, boolean internal) {
+         CompilerDirectives.transferToInterpreterAndInvalidate();
+         this.co = co;

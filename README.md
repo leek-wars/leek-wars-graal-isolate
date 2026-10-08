@@ -80,6 +80,14 @@ exécuter des binaires depuis l'arbre de build :
   comme GraalJS, plus un par itération de compréhension, et un `Tag(Statement)` par statement
   même sur la ligne de son parent. L'instrument compte statements + expressions pour tous les
   langages.
+  Il porte aussi le rétroportage du correctif amont `ad0345f` (oracle/graalpython#1083, dans
+  aucune release au 08/10/2026) : sous un engine partagé, le nœud racine de chaque fonction
+  appelée était rangé dans un cache FORT du langage, indexé par son `CodeUnit`. Le sandbox ne
+  peut pas écrire de `.pyc`, et le cache de sources est faible : les sources (code du joueur,
+  préludes, stdlib) étaient donc recompilées à chaque contexte, et le cache grossissait sans fin
+  jusqu'au `MemoryError` de tout l'isolate. Les nœuds enfants vivent désormais sur leur nœud
+  parent (`PBytecodeDSLRootNode.getOrCreateChildRootNode`). À retirer quand on passera à une
+  release qui contient ce commit.
 - `src/com.leekwars.truffle.instrument/` — l'instrument (copié dans l'arbre graaljs au build).
 - `scripts/Gate2.java` — harnais de validation (instrument listé, binding lisible,
   déterminisme, coûts).
