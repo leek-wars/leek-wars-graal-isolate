@@ -3,6 +3,7 @@ import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.Instrument;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
+import org.graalvm.polyglot.proxy.ProxyExecutable;
 
 import com.leekwars.generator.polyglot.StatementCounter;
 
@@ -73,6 +74,24 @@ public class Gate2 {
                 long t1 = System.nanoTime();
                 for (int i = 0; i < 20; i++) ctx.eval(Source.create("js", LOOP));
                 System.out.println("[5] avec instrument actif: " + ((System.nanoTime() - t1) / 20 / 1000) + " us/eval");
+            }
+
+            // [6] memoire retenue par le contexte (System.usedRAM) : lue par l'hote, puis depuis un
+            // appel guest -> hote (le cas reel : l'IA lit System.usedRAM pendant son tour).
+            try (Context ctx = Context.newBuilder("js").engine(engine).build()) {
+                Value heap = ctx.getPolyglotBindings().getMember(StatementCounter.HEAP_BINDING_NAME);
+                if (heap == null) { System.out.println("FAIL [6]: binding " + StatementCounter.HEAP_BINDING_NAME + " absent"); return; }
+                long before = heap.execute().asLong();
+                ctx.eval(Source.create("js", "globalThis.keep = []; for (var i = 0; i < 5000000; i++) keep.push(i); keep.length"));
+                long t0 = System.nanoTime();
+                long after = heap.execute().asLong();
+                long us = (System.nanoTime() - t0) / 1000;
+                ctx.getBindings("js").putMember("measure", (ProxyExecutable) a -> heap.execute().asLong());
+                long nested = ctx.eval(Source.create("js", "measure()")).asLong();
+                long stopped = heap.execute(1_000_000L).asLong();
+                boolean ok = after - before > 15_000_000 && nested >= after - 1_000_000 && stopped > 1_000_000 && stopped < after;
+                System.out.println("[6] " + (ok ? "OK" : "KO") + ": retenu avant=" + before + " apres=" + after + " (" + us
+                        + " us) depuis le guest=" + nested + " arrete a 1 Mo=" + stopped);
             }
         }
 

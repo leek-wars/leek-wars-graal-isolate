@@ -108,4 +108,4 @@ mkdir -p "$WORK/harness-out"
 
 echo
 echo "OK -> dist/js-isolate-resources-linux-amd64.jar ($(du -h dist/js-isolate-resources-linux-amd64.jar | cut -f1))"
-echo "Le run Gate2 ci-dessus doit afficher [2] OK, [3] DETERMINISTE."
+echo "Le run Gate2 ci-dessus doit afficher [2] OK, [3] DETERMINISTE, [6] OK."

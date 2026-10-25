@@ -6,6 +6,8 @@ Truffle `StatementCounter`**. Résultat, pour les IA polyglot JS/TS **et Python*
 - limite RAM par-poireau (`sandbox.MaxHeapMemory`, apport de l'isolate) ;
 - compteur d'opérations **déterministe** (statements guest, bit-reproductible pour les replays
   et l'arène classée) — mutuellement exclusifs avec les artefacts officiels ;
+- mesure de la **mémoire retenue** par chaque contexte (`System.usedRAM`), le calcul même de
+  `sandbox.MaxHeapMemory` (depuis `combined-6`) ;
 - **une seule lib native** : la limite GraalVM « une lib isolate in-process par JVM » ne
   s'applique plus (avant, un worker qui avait joué du js ne pouvait plus créer d'engine python).
 
@@ -22,7 +24,7 @@ Le jar est publié en **release publique** — inutile de refaire le build lourd
 
 ```bash
 curl -fsSL -o js-isolate-resources-linux-amd64.jar \
-  https://github.com/leek-wars/leek-wars-graal-isolate/releases/download/v25.1.3-combined-2/js-isolate-resources-linux-amd64.jar
+  https://github.com/leek-wars/leek-wars-graal-isolate/releases/download/v25.1.3-combined-6/js-isolate-resources-linux-amd64.jar
 ```
 
 C'est ce que fait la CI du générateur, et ce dont un joueur a besoin pour tester une IA
@@ -41,10 +43,12 @@ JS/Python en local (le placer dans `generator/libs/`).
 > builder en local puis `gh release create`.
 
 Prérequis : linux-amd64, ~20 Go de disque sur un FS **exécutable**, build-essential +
-zlib1g-dev, python3, git, curl, ~8 Go de RAM. Durée ~15-30 min (image native ~5 min / 24 cœurs).
+zlib1g-dev, python3, git, curl, et de la RAM : le builder native-image de l'image combinée a
+manqué de tas à 10 Go (OutOfMemoryError à `[6/8] Compiling methods`) et passé à 20 Go
+(`NATIVE_IMAGE_OPTIONS=-J-Xmx20g`). Durée ~15-30 min (~10 min en incrémental).
 Le script est idempotent (`work/` est réutilisé) ; `WORK=/chemin ./build.sh` pour déplacer le
 répertoire de travail. Il finit par exécuter le harnais `scripts/Gate2.java` : il DOIT afficher
-`[2] OK` et `[3] ... -> DETERMINISTE`.
+`[2] OK`, `[3] ... -> DETERMINISTE` et `[6] OK`.
 
 ### Si le FS de build est noexec (ex : /media/hdd)
 
@@ -85,7 +89,7 @@ exécuter des binaires depuis l'arbre de build :
   release le contient.
 - `src/com.leekwars.truffle.instrument/` — l'instrument (copié dans l'arbre graaljs au build).
 - `scripts/Gate2.java` — harnais de validation (instrument listé, binding lisible,
-  déterminisme, coûts).
+  déterminisme, coûts, mémoire retenue lue par l'hôte et depuis un appel guest → hôte).
 - `scripts/Gate3Prod.java` — harnais config PROD (`SandboxPolicy.ISOLATED` + cascade
   `sandbox.Max*`) : option acceptée, binding lisible, déterminisme, anti-triche guest.
 - `dist/` — artefact produit (recopié dans le repo generator, voir Intégration).
@@ -127,6 +131,10 @@ exécuter des binaires depuis l'arbre de build :
 - `PolyglotSandbox` pose `.option("lw-statement-counter", "true")` sur l'engine isolate JS et
   lit le compteur via les polyglot bindings du contexte ; `PolyglotEntityAI.getOperations()`
   retrouve sa branche déterministe (reset par tour via `execute(reset)`).
+- L'instrument publie aussi `lwHeapSize` : `execute(stopAtBytes)` = octets retenus par le contexte
+  (`TruffleInstrument.Env.calculateContextHeapSize`, calcul arrêté au-delà de `stopAtBytes`).
+  `PolyglotEntityAI.getUsedRAM()` le lit pour `System.usedRAM` ; le calcul parcourt le tas
+  (~2 ms par Mo), d'où une mesure fraîche par tour puis un cache.
 - ✅ **Anti-triche : gratuit sous la config prod.** Sous `SandboxPolicy.ISOLATED`, le builtin
   `Polyglot` n'existe pas côté guest (`typeof Polyglot === 'undefined'`, vérifié par
   `Gate3Prod` [P4]) : un joueur ne peut ni importer ni reset le compteur. Seuls l'hôte et
@@ -143,6 +151,6 @@ exécuter des binaires depuis l'arbre de build :
    (release du repo `graalvm/graalvm-ce-dev-builds` de la même ligne), `GRAAL_VERSION`.
 2. `rm -rf work && ./build.sh` — si les patches ne s'appliquent plus, les régénérer (ils sont
    minuscules, cf. `patches/`).
-3. Vérifier la sortie Gate2 (`[3] DETERMINISTE`), recopier `dist/*.jar` dans le generator,
+3. Vérifier la sortie Gate2 (`[3] DETERMINISTE`, `[6] OK`), recopier `dist/*.jar` dans le generator,
    bump la version des AUTRES deps GraalVM de `build.gradle` à l'unisson, suite de tests
    polyglot du generator, push develop → CI worker-beta.
