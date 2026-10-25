@@ -88,6 +88,8 @@ export POLYGLOT_ISOLATES=js
 export LW_ISOLATE_INSTRUMENT=1
 export LW_ISOLATE_PYTHON=1        # image COMBINEE js+python (une seule lib native)
 export GENERATE_DEBUGINFO=false   # pas de debug info dans la .so
+# Tas du builder native-image : l'image combinee manque de tas a 10 Go ([6/8] Compiling methods).
+export NATIVE_IMAGE_OPTIONS="${NATIVE_IMAGE_OPTIONS:--J-Xmx20g}"
 # LW_SKIP_TOOLCHAIN_TEST=1 : seulement si le FS de build est noexec (voir README)
 # --version-conflict-resolution ignore : graaljs et graalpython epinglent deux commits
 # graal proches mais differents de la meme ligne ; on construit sur le pin graalpython.

@@ -43,9 +43,8 @@ JS/Python en local (le placer dans `generator/libs/`).
 > builder en local puis `gh release create`.
 
 Prérequis : linux-amd64, ~20 Go de disque sur un FS **exécutable**, build-essential +
-zlib1g-dev, python3, git, curl, et de la RAM : le builder native-image de l'image combinée a
-manqué de tas à 10 Go (OutOfMemoryError à `[6/8] Compiling methods`) et passé à 20 Go
-(`NATIVE_IMAGE_OPTIONS=-J-Xmx20g`). Durée ~15-30 min (~10 min en incrémental).
+zlib1g-dev, python3, git, curl, ~24 Go de RAM libre (`build.sh` donne 20 Go de tas au builder
+native-image, à 10 Go il en manque). Durée ~15-30 min (~10 min en incrémental).
 Le script est idempotent (`work/` est réutilisé) ; `WORK=/chemin ./build.sh` pour déplacer le
 répertoire de travail. Il finit par exécuter le harnais `scripts/Gate2.java` : il DOIT afficher
 `[2] OK`, `[3] ... -> DETERMINISTE` et `[6] OK`.
