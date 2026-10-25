@@ -7,7 +7,7 @@
 # (remplace org.graalvm.polyglot:js-isolate-linux-amd64-community:$GRAAL_VERSION)
 #
 # Prérequis : linux-amd64, ~20 Go de disque sur un FS **exécutable** (pas de noexec),
-# gcc/make/zlib headers (build-essential zlib1g-dev), python3, git, curl, ~8 Go de RAM.
+# gcc/make/zlib headers (build-essential zlib1g-dev), python3, git, curl, ~24 Go de RAM libre (20 Go de tas pour native-image).
 #
 # Durée : ~15-30 min selon la machine (l'image native ~5 min sur 24 cœurs).
 set -euo pipefail
