@@ -14,6 +14,14 @@ EXEC_BASE=/home/pierre/.cache/lw-graal-isolate-exec
 # prochain bump GraalVM.
 eval "$(grep -E '^(BOOTSTRAP_URL|GRAALJS_TAG|GRAAL_COMMIT)=' "$REPO/build.sh")"
 
+# build.sh refait l'arbre quand ses pins changent : le faire avant de poser les liens ci-dessous,
+# et jeter aussi ses copies exécutables liées aux anciens pins.
+LW_PINS_ONLY=1 bash "$REPO/build.sh"
+mkdir -p "$EXEC_BASE"
+if ! cmp -s "$WORK/.pins" "$EXEC_BASE/.pins"; then
+    rm -rf "$EXEC_BASE/jdks" "$EXEC_BASE/bootstrap" "$EXEC_BASE/libffi" "$EXEC_BASE/LLVM_TOOLCHAIN"
+    cp "$WORK/.pins" "$EXEC_BASE/.pins"
+fi
 mkdir -p "$WORK" "$EXEC_BASE/jdks" "$EXEC_BASE/bootstrap" "$EXEC_BASE/libffi"
 
 # jdks : symlink (cible vide -> le ls de build.sh echoue -> fetch-jdk ecrit a travers le lien)

@@ -31,12 +31,13 @@ public class Gate2 {
     }
 
     public static void main(String[] args) throws Exception {
+        int failures = 0;
         System.out.println("=== Gate 2 : lecture hote du StatementCounter sous isolate (via bindings) ===");
 
         try (Engine engine = newIsolateEngine(true)) {
             System.out.println("[1] instruments = " + engine.getInstruments().keySet());
             Instrument instr = engine.getInstruments().get(StatementCounter.ID);
-            if (instr == null) { System.out.println("FAIL [1]: instrument absent"); return; }
+            if (instr == null) { System.out.println("FAIL [1]: instrument absent"); System.exit(1); }
             // informatif : le lookup service ne marche pas sous isolate
             System.out.println("[1b] lookup service (attendu null sous isolate) = "
                     + instr.lookup(StatementCounter.Counter.class));
@@ -44,7 +45,7 @@ public class Gate2 {
             long run1, run2;
             try (Context ctx = Context.newBuilder("js").engine(engine).build()) {
                 Value counter = ctx.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
-                if (counter == null) { System.out.println("FAIL [2]: binding absent"); return; }
+                if (counter == null) { System.out.println("FAIL [2]: binding absent"); System.exit(1); }
                 System.out.println("[2] OK: binding present, executable=" + counter.canExecute());
                 counter.execute("reset");
                 ctx.eval(Source.create("js", LOOP));
@@ -56,8 +57,9 @@ public class Gate2 {
                 ctx.eval(Source.create("js", LOOP));
                 run2 = counter.execute().asLong();
             }
-            System.out.println("[3] run1=" + run1 + " run2=" + run2
-                    + (run1 == run2 && run1 > 0 ? " -> DETERMINISTE" : " -> KO"));
+            boolean deterministic = run1 == run2 && run1 > 0;
+            System.out.println("[3] run1=" + run1 + " run2=" + run2 + (deterministic ? " -> DETERMINISTE" : " -> KO"));
+            if (!deterministic) failures++;
 
             try (Context ctx = Context.newBuilder("js").engine(engine).build()) {
                 Value counter = ctx.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
@@ -80,7 +82,7 @@ public class Gate2 {
             // appel guest -> hote (le cas reel : l'IA lit System.usedRAM pendant son tour).
             try (Context ctx = Context.newBuilder("js").engine(engine).build()) {
                 Value heap = ctx.getPolyglotBindings().getMember(StatementCounter.HEAP_BINDING_NAME);
-                if (heap == null) { System.out.println("FAIL [6]: binding " + StatementCounter.HEAP_BINDING_NAME + " absent"); return; }
+                if (heap == null) { System.out.println("FAIL [6]: binding " + StatementCounter.HEAP_BINDING_NAME + " absent"); System.exit(1); }
                 long before = heap.execute().asLong();
                 ctx.eval(Source.create("js", "globalThis.keep = []; for (var i = 0; i < 5000000; i++) keep.push(i); keep.length"));
                 long t0 = System.nanoTime();
@@ -90,6 +92,7 @@ public class Gate2 {
                 long nested = ctx.eval(Source.create("js", "measure()")).asLong();
                 long stopped = heap.execute(1_000_000L).asLong();
                 boolean ok = after - before > 15_000_000 && nested >= after - 1_000_000 && stopped > 1_000_000 && stopped < after;
+                if (!ok) failures++;
                 System.out.println("[6] " + (ok ? "OK" : "KO") + ": retenu avant=" + before + " apres=" + after + " (" + us
                         + " us) depuis le guest=" + nested + " arrete a 1 Mo=" + stopped);
             }
@@ -106,5 +109,7 @@ public class Gate2 {
         }
 
         System.out.println("=== fin Gate 2 ===");
+        // Code de sortie = verdict.
+        if (failures > 0) System.exit(1);
     }
 }

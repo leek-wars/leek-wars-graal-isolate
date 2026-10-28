@@ -7,7 +7,8 @@
 # (remplace org.graalvm.polyglot:js-isolate-linux-amd64-community:$GRAAL_VERSION)
 #
 # Prérequis : linux-amd64, ~20 Go de disque sur un FS **exécutable** (pas de noexec),
-# gcc/make/zlib headers (build-essential zlib1g-dev), python3, git, curl, ~24 Go de RAM libre (20 Go de tas pour native-image).
+# gcc/make/zlib headers (build-essential zlib1g-dev), python3, git, curl,
+# ~24 Go de RAM libre (20 Go de tas pour native-image).
 #
 # Durée : ~15-30 min selon la machine (l'image native ~5 min sur 24 cœurs).
 set -euo pipefail
@@ -32,10 +33,26 @@ BOOTSTRAP_URL="https://github.com/graalvm/graalvm-ce-builds/releases/download/gr
 
 WORK=${WORK:-$PWD/work}
 mkdir -p "$WORK" dist
+rm -f dist/js-isolate-resources-linux-amd64.jar # un build raté ne laisse pas l'ancien jar
+# Clones superficiels, JDK et bootstrap ne se mettent pas à jour en place : refaits quand les pins
+# changent (mx, clone complet, se remet à jour plus bas). On n'efface que ce que ce script crée :
+# WORK peut contenir autre chose. LW_PINS_ONLY=1 : s'arrêter là (build-noexec-hdd.sh).
+pins=$(sed -n '/^### Pins/,/^WORK=/p' build.sh | grep -E '^[A-Z_]+=' | grep -v '^WORK=' | sed 's/[[:space:]]*#.*//')
+if [ "$(cat "$WORK/.pins" 2> /dev/null)" != "$pins" ]; then
+    echo "Pins nouveaux ou changés : clones, JDK et bootstrap de $WORK refaits"
+    (cd "$WORK" && rm -rf graal graaljs graalpython jdks bootstrap bootstrap.tmp bootstrap.tar.gz harness-out host-classpath.txt)
+fi
+echo "$pins" > "$WORK/.pins"
+[ -z "${LW_PINS_ONLY:-}" ] || exit 0
 export MX_PYTHON=python3
 export MX_CACHE_DIR="$WORK/mx-cache"
 
 step() { echo; echo "=== $* ==="; }
+# Échec à nommer : en annotation dans GitHub Actions, que `gh run view` affiche sans le journal.
+fail() {
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then echo "::error::$*"; else echo "$*" >&2; fi
+    exit 1
+}
 
 ### 1. Sources
 step "Clones (graal @ $GRAAL_COMMIT, graaljs @ $GRAALJS_TAG, mx @ $MX_VERSION)"
@@ -43,8 +60,10 @@ if [ ! -d "$WORK/mx" ]; then git clone https://github.com/graalvm/mx.git "$WORK/
 git -C "$WORK/mx" fetch --tags -q && git -C "$WORK/mx" checkout -q "$MX_VERSION"
 if [ ! -d "$WORK/graal" ]; then
     git clone --depth 1 --branch "$GRAALJS_TAG" https://github.com/oracle/graal.git "$WORK/graal"
-    git -C "$WORK/graal" fetch --depth 1 origin "$GRAAL_COMMIT"
 fi
+# Hors du if : un fetch qui a échoué au run précédent est refait.
+git -C "$WORK/graal" cat-file -e "$GRAAL_COMMIT^{commit}" 2> /dev/null \
+    || git -C "$WORK/graal" fetch --depth 1 origin "$GRAAL_COMMIT"
 git -C "$WORK/graal" checkout -q "$GRAAL_COMMIT"
 if [ ! -d "$WORK/graaljs" ]; then
     git clone --depth 1 --branch "$GRAALJS_TAG" https://github.com/oracle/graaljs.git "$WORK/graaljs"
@@ -75,8 +94,10 @@ JAVA_HOME=$(ls -d "$WORK"/jdks/labsjdk-*_amd64 | sort | tail -1)
 export JAVA_HOME
 if [ ! -d "$WORK/bootstrap" ]; then
     curl -fsSL -o "$WORK/bootstrap.tar.gz" "$BOOTSTRAP_URL"
-    mkdir -p "$WORK/bootstrap"
-    tar -xzf "$WORK/bootstrap.tar.gz" -C "$WORK/bootstrap" --strip-components=1
+    # Extrait à côté puis renommé : une extraction interrompue n'est pas prise pour complète.
+    rm -rf "$WORK/bootstrap.tmp" && mkdir "$WORK/bootstrap.tmp"
+    tar -xzf "$WORK/bootstrap.tar.gz" -C "$WORK/bootstrap.tmp" --strip-components=1
+    mv "$WORK/bootstrap.tmp" "$WORK/bootstrap"
     rm "$WORK/bootstrap.tar.gz"
 fi
 export BOOTSTRAP_GRAALVM="$WORK/bootstrap"
@@ -90,6 +111,19 @@ export LW_ISOLATE_PYTHON=1        # image COMBINEE js+python (une seule lib nati
 export GENERATE_DEBUGINFO=false   # pas de debug info dans la .so
 # Tas du builder native-image : l'image combinee manque de tas a 10 Go ([6/8] Compiling methods).
 export NATIVE_IMAGE_OPTIONS="${NATIVE_IMAGE_OPTIONS:--J-Xmx20g}"
+# LW_MIN_FREE_RAM_GB (machine partagee, posee par l'image du runner) : attendre LW_RAM_WAIT_MIN
+# minutes au plus (30 par defaut) que ce nombre de Go soit disponible, plutot que de pousser les
+# autres processus vers l'OOM.
+if [ -n "${LW_MIN_FREE_RAM_GB:-}" ]; then
+    wait_min=${LW_RAM_WAIT_MIN:-30}
+    for minute in $(seq 0 "$wait_min"); do
+        avail=$(awk '/^MemAvailable:/ {print int($2 / 1048576)}' /proc/meminfo)
+        [ "$avail" -ge "$LW_MIN_FREE_RAM_GB" ] && break
+        [ "$minute" -lt "$wait_min" ] || fail "RAM disponible : $avail Go après $wait_min min, il en faut $LW_MIN_FREE_RAM_GB"
+        echo "RAM disponible : $avail Go, il en faut $LW_MIN_FREE_RAM_GB : nouvel essai dans une minute"
+        sleep 60
+    done
+fi
 # LW_SKIP_TOOLCHAIN_TEST=1 : seulement si le FS de build est noexec (voir README)
 # --version-conflict-resolution ignore : graaljs et graalpython epinglent deux commits
 # graal proches mais differents de la meme ligne ; on construit sur le pin graalpython.
@@ -100,14 +134,15 @@ bash "$WORK/mx/mx" -p "$WORK/graaljs/graal-js" --dy /substratevm,graalpython \
 ### 5. Artefact + validation Gate2
 step "Artefact + validation"
 JAR="$WORK/graaljs/graal-js/mxbuild/linux-amd64/dists/jdk17/js-isolate-resources-linux-amd64.jar"
-cp "$JAR" dist/
 bash "$WORK/mx/mx" -p "$WORK/graaljs/graal-js" --dy /substratevm,graalpython --version-conflict-resolution ignore \
     classpath graal-js:JS_ISOLATE_LINUX_AMD64 | tail -1 > "$WORK/host-classpath.txt"
 CP="$(cat "$WORK/host-classpath.txt"):$WORK/graaljs/graal-js/mxbuild/dists/lw-instrument.jar"
 mkdir -p "$WORK/harness-out"
 "$JAVA_HOME/bin/javac" -cp "$CP" -d "$WORK/harness-out" scripts/Gate2.java
-"$JAVA_HOME/bin/java" --enable-native-access=ALL-UNNAMED -cp "$CP:$WORK/harness-out" Gate2
+# Gate2 sort en erreur sur un KO : dist/ ne reçoit qu'un jar validé.
+"$JAVA_HOME/bin/java" --enable-native-access=ALL-UNNAMED -cp "$CP:$WORK/harness-out" Gate2 \
+    || fail "Gate2 KO (détail dans le journal du build)"
+cp "$JAR" dist/
 
 echo
 echo "OK -> dist/js-isolate-resources-linux-amd64.jar ($(du -h dist/js-isolate-resources-linux-amd64.jar | cut -f1))"
-echo "Le run Gate2 ci-dessus doit afficher [2] OK, [3] DETERMINISTE, [6] OK."

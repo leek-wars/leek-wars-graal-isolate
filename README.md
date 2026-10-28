@@ -20,15 +20,10 @@ officielles épinglées.
 
 ## Télécharger (sans builder)
 
-Le jar est publié en **release publique** — inutile de refaire le build lourd :
-
-```bash
-curl -fsSL -o js-isolate-resources-linux-amd64.jar \
-  https://github.com/leek-wars/leek-wars-graal-isolate/releases/download/v25.1.3-combined-6/js-isolate-resources-linux-amd64.jar
-```
-
-C'est ce que fait la CI du générateur, et ce dont un joueur a besoin pour tester une IA
-JS/Python en local (le placer dans `generator/libs/`).
+Le jar est publié en **release publique** — inutile de refaire le build lourd. Le générateur
+épingle la version qu'il utilise dans `libs/isolate-image.txt` ; dans son dépôt,
+`sh libs/fetch-isolate.sh` la télécharge et vérifie son sha256 : c'est ce que fait tout build du
+générateur, et ce dont un joueur a besoin pour tester une IA JS/Python en local.
 
 ## Reproduire (builder soi-même)
 
@@ -36,18 +31,17 @@ JS/Python en local (le placer dans `generator/libs/`).
 ./build.sh          # produit dist/js-isolate-resources-linux-amd64.jar (~127 Mo, js+python)
 ```
 
-> La CI (`.github/workflows/build.yml`) fait exactement ça sur un runner self-hosted
-> labellisé `graal-isolate`, en **`workflow_dispatch` uniquement** (build manuel) : elle
-> build, **valide Gate2** (`[2] OK` + `-> DETERMINISTE`, greppés car le harnais sort en 0
-> même sur un KO) et **publie le jar en release** (tag paramétrable). Sans runner rattaché,
-> builder en local puis `gh release create`.
+> La CI (`.github/workflows/build.yml`) fait exactement ça sur le runner self-hosted
+> `graal-isolate`, puis publie le jar en release sur un tag (cf. « Publier une version »).
 
 Prérequis : linux-amd64, ~20 Go de disque sur un FS **exécutable**, build-essential +
 zlib1g-dev, python3, git, curl, ~24 Go de RAM libre (`build.sh` donne 20 Go de tas au builder
-native-image, à 10 Go il en manque). Durée ~15-30 min (~10 min en incrémental).
-Le script est idempotent (`work/` est réutilisé) ; `WORK=/chemin ./build.sh` pour déplacer le
-répertoire de travail. Il finit par exécuter le harnais `scripts/Gate2.java` : il DOIT afficher
-`[2] OK`, `[3] ... -> DETERMINISTE` et `[6] OK`.
+native-image, à 10 Go il en manque). Avec `LW_MIN_FREE_RAM_GB=<Go>`, il attend que cette RAM soit
+disponible, `LW_RAM_WAIT_MIN` minutes au plus (30 par défaut). Durée ~15-30 min (~10 min en
+incrémental). Le script est idempotent (`work/` est réutilisé, et repart de zéro quand un pin de
+version change) ; `WORK=/chemin ./build.sh` pour déplacer le répertoire de travail. Il finit par
+le harnais `scripts/Gate2.java` (binding lisible, déterminisme, mémoire retenue), qui le fait
+échouer sur un KO : `dist/` ne reçoit qu'un jar validé.
 
 ### Si le FS de build est noexec (ex : /media/hdd)
 
@@ -91,7 +85,7 @@ exécuter des binaires depuis l'arbre de build :
   déterminisme, coûts, mémoire retenue lue par l'hôte et depuis un appel guest → hôte).
 - `scripts/Gate3Prod.java` — harnais config PROD (`SandboxPolicy.ISOLATED` + cascade
   `sandbox.Max*`) : option acceptée, binding lisible, déterminisme, anti-triche guest.
-- `dist/` — artefact produit (recopié dans le repo generator, voir Intégration).
+- `dist/` — artefact produit (publié en release, voir « Publier une version »).
 
 ## Les 6 découvertes qui font tenir le montage
 
@@ -121,19 +115,50 @@ exécuter des binaires depuis l'arbre de build :
    isolate **processus externe** (`engine.IsolateMode=external`) — mais `sandbox.MaxHeapMemory`
    par contexte n'y est PAS appliqué et le multi-fichiers y est cassé.
 
+## Publier une version
+
+1. Pousser le commit, puis un tag `v<version GraalVM>-combined-<n>` : le workflow se déclenche
+   sur le tag, construit sur le runner `graal-isolate` et publie la release de ce tag. Son résumé
+   (et le sha256 des notes de la release) donne la ligne « `<tag> <sha256>` » à reporter. Si
+   seule la publication a échoué : `gh run rerun --failed <run>` (le jar construit est repris de
+   l'artefact ; supprimer d'abord un brouillon de release qu'elle aurait laissé). Lancé à la
+   main, le workflow ne fait que le build et Gate2.
+2. Dans le générateur, remplacer la ligne de `libs/isolate-image.txt` par celle-ci et pousser.
+
+Le runner est un conteneur durable (`runner/Dockerfile`, lancé par `runner/run.sh`, qui contrôle
+l'image avant de le créer) :
+- aucun binaire setuid, `no-new-privileges`, pas de docker.sock ni de dossier de l'hôte, mémoire
+  bornée et premier tué si l'hôte en manque ; build retardé tant que la machine n'a pas la RAM
+  du tas native-image (`LW_MIN_FREE_RAM_GB`) ; deux volumes : l'arbre de build (builds incrémentaux) et
+  l'enregistrement ; recréé à chaque `runner/run.sh` (le runner repart de la version de
+  l'image et se remet à jour) ;
+- enregistré une fois par un jeton d'enregistrement du dépôt (valable une heure) ; il garde
+  ensuite ses propres identifiants, qui ne servent qu'à recevoir les jobs de ce dépôt ;
+- sa garde `runner/job-started.sh` n'accepte qu'un tag poussé ou un lancement manuel depuis
+  master : une pull request, ou un lancement depuis une autre ref, exécuterait ses propres
+  fichiers de workflow ;
+- non éphémère : `runner/entrypoint.sh` remet sa configuration à zéro à chaque démarrage, mais un
+  job accepté peut modifier le conteneur (binaires du runner compris) jusqu'à ce qu'il soit
+  recréé, et l'arbre de build (volume `/work`, partagé par tous les builds, dont ceux d'un tag
+  poussé sur n'importe quel commit) jusqu'à ce que son volume soit supprimé : le runner ne doit
+  exécuter que du code de confiance ;
+- le build n'a qu'un jeton en lecture ; la release est publiée par un second job, sur un runner
+  hébergé par GitHub, sans jamais écraser une release existante.
+
 ## Intégration generator / worker
 
-- L'artefact `dist/js-isolate-resources-linux-amd64.jar` est copié dans le repo generator
-  (public, `leek-wars/leek-wars-generator`) sous `libs/` et remplace les DEUX dépendances Maven
-  `org.graalvm.polyglot:{js,python}-isolate-linux-amd64-community` dans `build.gradle`
-  (l'uber-jar worker y gagne ~80 Mo).
+- L'artefact `dist/js-isolate-resources-linux-amd64.jar`, publié en release, est épinglé par le
+  générateur (public, `leek-wars/leek-wars-generator`, cf. « Télécharger »). Il remplace les
+  DEUX dépendances Maven `org.graalvm.polyglot:{js,python}-isolate-linux-amd64-community` dans
+  `build.gradle` (l'uber-jar worker y gagne ~80 Mo).
 - `PolyglotSandbox` pose `.option("lw-statement-counter", "true")` sur l'engine isolate JS et
   lit le compteur via les polyglot bindings du contexte ; `PolyglotEntityAI.getOperations()`
   retrouve sa branche déterministe (reset par tour via `execute(reset)`).
 - L'instrument publie aussi `lwHeapSize` : `execute(stopAtBytes)` = octets retenus par le contexte
   (`TruffleInstrument.Env.calculateContextHeapSize`, calcul arrêté au-delà de `stopAtBytes`).
   `PolyglotEntityAI.getUsedRAM()` le lit pour `System.usedRAM` ; le calcul parcourt le tas
-  (~2 ms par Mo), d'où une mesure fraîche par tour puis un cache.
+  (~2 ms par Mo), d'où un cache : la mesure suivante attend que l'IA ait calculé quatre fois la
+  durée de la précédente.
 - ✅ **Anti-triche : gratuit sous la config prod.** Sous `SandboxPolicy.ISOLATED`, le builtin
   `Polyglot` n'existe pas côté guest (`typeof Polyglot === 'undefined'`, vérifié par
   `Gate3Prod` [P4]) : un joueur ne peut ni importer ni reset le compteur. Seuls l'hôte et
@@ -146,10 +171,11 @@ exécuter des binaires depuis l'arbre de build :
 1. Mettre à jour les pins de `build.sh` : `GRAALJS_TAG`/`GRAALPYTHON_TAG` (nouveau tag),
    `GRAAL_COMMIT` (le plus RÉCENT des pins regex des suites graaljs ET graalpython —
    `mx.graal-js/suite.py` et `mx.graalpython/suite.py` → suites → regex → version),
-   `MX_VERSION` (max des exigences, graalpython est le plus exigeant), `BOOTSTRAP_TAG`
-   (release du repo `graalvm/graalvm-ce-dev-builds` de la même ligne), `GRAAL_VERSION`.
-2. `rm -rf work && ./build.sh` — si les patches ne s'appliquent plus, les régénérer (ils sont
-   minuscules, cf. `patches/`).
-3. Vérifier la sortie Gate2 (`[3] DETERMINISTE`, `[6] OK`), recopier `dist/*.jar` dans le generator,
-   bump la version des AUTRES deps GraalVM de `build.gradle` à l'unisson, suite de tests
-   polyglot du generator, push develop → CI worker-beta.
+   `MX_VERSION` (max des exigences, graalpython est le plus exigeant), `BOOTSTRAP_URL`
+   (release stable de `graalvm/graalvm-ce-builds` de la même ligne), `GRAAL_VERSION`.
+2. `./build.sh` (il repart de zéro : les pins ont changé) — si les patches ne s'appliquent plus,
+   les régénérer (ils sont minuscules, cf. `patches/`).
+3. Pour tester avant de publier : copier `dist/*.jar` dans `libs/` du generator (sans lancer
+   `libs/fetch-isolate.sh`, qui remettrait le jar épinglé), bump la version des AUTRES deps
+   GraalVM de `build.gradle` à l'unisson, suite de tests polyglot du generator, puis publier
+   (cf. « Publier une version »).
