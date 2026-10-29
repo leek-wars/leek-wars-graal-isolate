@@ -17,7 +17,7 @@ jobs:
     runs-on: [self-hosted, graal-isolate]
     timeout-minutes: 240 # attente de RAM comprise (LW_RAM_WAIT_MIN de runner/Dockerfile)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
@@ -36,7 +36,7 @@ jobs:
         run: nice -n 10 ./build.sh
 
       - name: Uploader le jar comme artefact de build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: js-isolate-resources-linux-amd64
           path: dist/js-isolate-resources-linux-amd64.jar
@@ -51,11 +51,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: js-isolate-resources-linux-amd64
           path: dist

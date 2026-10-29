@@ -1,0 +1,13 @@
+# Actions épinglées par SHA (commentaire = version) : une seule PR par mois pour toutes les montées,
+# et seulement des versions publiées depuis 7 jours.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
