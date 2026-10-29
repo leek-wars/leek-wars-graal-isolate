@@ -128,10 +128,10 @@ exécuter des binaires depuis l'arbre de build :
 Le runner est un conteneur durable (`runner/Dockerfile`, lancé par `runner/run.sh`, qui contrôle
 l'image avant de le créer) :
 - aucun binaire setuid, `no-new-privileges`, pas de docker.sock ni de dossier de l'hôte, mémoire
-  bornée et premier tué si l'hôte en manque ; build retardé tant que la machine n'a pas la RAM
-  du tas native-image (`LW_MIN_FREE_RAM_GB`) ; deux volumes : l'arbre de build (builds incrémentaux) et
-  l'enregistrement ; recréé à chaque `runner/run.sh` (le runner repart de la version de
-  l'image et se remet à jour) ;
+  bornée, compilation première tuée si l'hôte en manque ; build retardé tant que la machine n'a pas
+  la RAM du tas native-image (`LW_MIN_FREE_RAM_GB`) ; deux volumes : l'arbre de build (builds
+  incrémentaux) et l'enregistrement ; recréé à chaque `runner/run.sh` (le runner repart de la
+  version de l'image et se remet à jour) ;
 - enregistré une fois par un jeton d'enregistrement du dépôt (valable une heure) ; il garde
   ensuite ses propres identifiants, qui ne servent qu'à recevoir les jobs de ce dépôt ;
 - sa garde `runner/job-started.sh` n'accepte qu'un tag poussé ou un lancement manuel depuis

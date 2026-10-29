@@ -123,6 +123,9 @@ if [ -n "${LW_MIN_FREE_RAM_GB:-}" ]; then
         echo "RAM disponible : $avail Go, il en faut $LW_MIN_FREE_RAM_GB : nouvel essai dans une minute"
         sleep 60
     done
+    # Si la RAM vient quand même à manquer, la compilation (ce shell, hérité par mx et
+    # native-image) est la première victime de l'OOM, pas un voisin ; l'attente, elle, ne l'est pas.
+    { echo 1000 > /proc/self/oom_score_adj; } 2> /dev/null || true
 fi
 # LW_SKIP_TOOLCHAIN_TEST=1 : seulement si le FS de build est noexec (voir README)
 # --version-conflict-resolution ignore : graaljs et graalpython epinglent deux commits

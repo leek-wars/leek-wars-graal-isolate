@@ -74,9 +74,10 @@ export RUNNER_TOKEN
 busy
 docker rm -f "$name" > /dev/null 2>&1 || true
 # Ni docker.sock ni dossier de l'hôte : deux volumes à lui. Mémoire bornée (build.sh donne
-# 20 Go de tas au builder native-image), et le build est le premier tué si l'hôte en manque.
+# 20 Go de tas au builder native-image ; build.sh désigne la compilation comme première victime
+# de l'OOM, le Listener garde un score normal).
 docker run -d --name "$name" --restart unless-stopped \
-	--memory 30g --memory-swap 30g --oom-score-adj 1000 --cpus 12 --pids-limit 8192 \
+	--memory 30g --memory-swap 30g --cpus 12 --pids-limit 8192 \
 	--cap-drop NET_RAW --security-opt no-new-privileges \
 	-v "$config:/runner-config" \
 	-v "$work:/work" \
