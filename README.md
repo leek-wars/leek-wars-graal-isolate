@@ -171,8 +171,11 @@ l'image avant de le créer) :
 1. Mettre à jour les pins de `build.sh` : `GRAALJS_TAG`/`GRAALPYTHON_TAG` (nouveau tag),
    `GRAAL_COMMIT` (le plus RÉCENT des pins regex des suites graaljs ET graalpython —
    `mx.graal-js/suite.py` et `mx.graalpython/suite.py` → suites → regex → version),
-   `MX_VERSION` (max des exigences, graalpython est le plus exigeant), `BOOTSTRAP_URL`
-   (release stable de `graalvm/graalvm-ce-builds` de la même ligne), `GRAAL_VERSION`.
+   `MX_COMMIT` (commit du tag mx le plus exigé, graalpython l'est le plus), `BOOTSTRAP_URL`
+   (release stable de `graalvm/graalvm-ce-builds` de la même ligne), `GRAAL_VERSION`. Puis les
+   commits des tags (`GRAALJS_COMMIT`, `GRAALPYTHON_COMMIT`, `MX_COMMIT` : `gh api
+   repos/<dépôt>/git/ref/tags/<tag>`, déréférencé par `git/tags/<sha>` pour un tag annoté) et
+   `BOOTSTRAP_SHA256` (le `.sha256` de la release, qui doit égaler le `digest` de l'asset).
 2. `./build.sh` (il repart de zéro : les pins ont changé) — si les patches ne s'appliquent plus,
    les régénérer (ils sont minuscules, cf. `patches/`).
 3. Pour tester avant de publier : copier `dist/*.jar` dans `libs/` du generator (sans lancer

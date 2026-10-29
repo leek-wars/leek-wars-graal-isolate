@@ -12,7 +12,7 @@ EXEC_BASE=/home/pierre/.cache/lw-graal-isolate-exec
 
 # Pins UNIQUES : lus depuis build.sh (source de verite), pas de copie qui driftera au
 # prochain bump GraalVM.
-eval "$(grep -E '^(BOOTSTRAP_URL|GRAALJS_TAG|GRAAL_COMMIT)=' "$REPO/build.sh")"
+eval "$(grep -E '^(BOOTSTRAP_URL|BOOTSTRAP_SHA256|GRAALJS_TAG|GRAAL_COMMIT)=' "$REPO/build.sh")"
 
 # build.sh refait l'arbre quand ses pins changent : le faire avant de poser les liens ci-dessous,
 # et jeter aussi ses copies exécutables liées aux anciens pins.
@@ -34,6 +34,7 @@ if ! "$EXEC_BASE/bootstrap/bin/native-image" --version 2>/dev/null | grep -q "Gr
     echo "=== Pre-download bootstrap GraalVM stable (graal $BOOTSTRAP_GRAAL_VERSION) ==="
     rm -rf "$EXEC_BASE/bootstrap"; mkdir -p "$EXEC_BASE/bootstrap"
     curl -fsSL -o "$WORK/bootstrap.tar.gz" "$BOOTSTRAP_URL"
+    echo "$BOOTSTRAP_SHA256  $WORK/bootstrap.tar.gz" | sha256sum -c --quiet -
     tar -xzf "$WORK/bootstrap.tar.gz" -C "$EXEC_BASE/bootstrap" --strip-components=1
     rm "$WORK/bootstrap.tar.gz"
 fi

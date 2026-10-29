@@ -22,7 +22,11 @@ GRAAL_VERSION=25.1.3
 GRAAL_COMMIT=2143cd9f4e3c06b5518d1cbd23c09a918bc9cb58
 GRAALJS_TAG=graal-25.1.3
 GRAALPYTHON_TAG=graal-25.1.3
-MX_VERSION=7.83.0          # exigé par la suite graalpython (>= common.json)
+# Commits des tags (un tag se déplace, un commit non) : le checkout par commit d'un clone
+# superficiel du tag échoue si le tag a bougé.
+GRAALJS_COMMIT=b86c15a3600750a255d716828a6b111d99594d4c
+GRAALPYTHON_COMMIT=a88321e8b4440a08abaa7b163a85e038a39ec9a0
+MX_COMMIT=22381992c7322f661498cd6101144f0f49c72ae1   # tag 7.83.0, exigé par la suite graalpython (>= common.json)
 JDK_ID=labsjdk-ce-latest   # résolu via graal/common.json
 # Release STABLE de la MÊME ligne (repo graalvm/graalvm-ce-builds) : sert de
 # BOOTSTRAP_GRAALVM (son native-image doit être de la ligne 25.1 : un builder 25.2+
@@ -30,6 +34,8 @@ JDK_ID=labsjdk-ce-latest   # résolu via graal/common.json
 # GraalVM localement. NE PAS reprendre un nightly de graalvm-ce-dev-builds : ils sont
 # purgés au fil de l'eau (le pin 25.1.3-dev-20260621 est devenu 404).
 BOOTSTRAP_URL="https://github.com/graalvm/graalvm-ce-builds/releases/download/graal-25.1.3/graalvm-community-jdk-25i1-25.0.3_linux-x64_bin.tar.gz"
+# Son native-image construit l'image : l'archive est vérifiée (sha256 du .sha256 de la release).
+BOOTSTRAP_SHA256=e9cd1637be853e105f8b09125b4b19fbce385696465d782cbca8bb80e1df8f0d
 
 WORK=${WORK:-$PWD/work}
 mkdir -p "$WORK" dist
@@ -37,7 +43,7 @@ rm -f dist/js-isolate-resources-linux-amd64.jar # un build raté ne laisse pas l
 # Clones superficiels, JDK et bootstrap ne se mettent pas à jour en place : refaits quand les pins
 # changent (mx, clone complet, se remet à jour plus bas). On n'efface que ce que ce script crée :
 # WORK peut contenir autre chose. LW_PINS_ONLY=1 : s'arrêter là (build-noexec-hdd.sh).
-pins=$(sed -n '/^### Pins/,/^WORK=/p' build.sh | grep -E '^[A-Z_]+=' | grep -v '^WORK=' | sed 's/[[:space:]]*#.*//')
+pins=$(sed -n '/^### Pins/,/^WORK=/p' build.sh | grep -E '^[A-Z0-9_]+=' | grep -v '^WORK=' | sed 's/[[:space:]]*#.*//')
 if [ "$(cat "$WORK/.pins" 2> /dev/null)" != "$pins" ]; then
     echo "Pins nouveaux ou changés : clones, JDK et bootstrap de $WORK refaits"
     (cd "$WORK" && rm -rf graal graaljs graalpython jdks bootstrap bootstrap.tmp bootstrap.tar.gz harness-out host-classpath.txt)
@@ -55,9 +61,10 @@ fail() {
 }
 
 ### 1. Sources
-step "Clones (graal @ $GRAAL_COMMIT, graaljs @ $GRAALJS_TAG, mx @ $MX_VERSION)"
+step "Clones (graal @ $GRAAL_COMMIT, graaljs @ $GRAALJS_TAG, mx @ $MX_COMMIT)"
 if [ ! -d "$WORK/mx" ]; then git clone https://github.com/graalvm/mx.git "$WORK/mx"; fi
-git -C "$WORK/mx" fetch --tags -q && git -C "$WORK/mx" checkout -q "$MX_VERSION"
+git -C "$WORK/mx" cat-file -e "$MX_COMMIT^{commit}" 2> /dev/null || git -C "$WORK/mx" fetch -q origin "$MX_COMMIT"
+git -C "$WORK/mx" checkout -q "$MX_COMMIT"
 if [ ! -d "$WORK/graal" ]; then
     git clone --depth 1 --branch "$GRAALJS_TAG" https://github.com/oracle/graal.git "$WORK/graal"
 fi
@@ -68,11 +75,11 @@ git -C "$WORK/graal" checkout -q "$GRAAL_COMMIT"
 if [ ! -d "$WORK/graaljs" ]; then
     git clone --depth 1 --branch "$GRAALJS_TAG" https://github.com/oracle/graaljs.git "$WORK/graaljs"
 fi
-git -C "$WORK/graaljs" checkout -q "$GRAALJS_TAG"
+git -C "$WORK/graaljs" checkout -q "$GRAALJS_COMMIT" || fail "graaljs : $GRAALJS_TAG n'est plus $GRAALJS_COMMIT"
 if [ ! -d "$WORK/graalpython" ]; then
     git clone --depth 1 --branch "$GRAALPYTHON_TAG" https://github.com/oracle/graalpython.git "$WORK/graalpython"
 fi
-git -C "$WORK/graalpython" checkout -q "$GRAALPYTHON_TAG"
+git -C "$WORK/graalpython" checkout -q "$GRAALPYTHON_COMMIT" || fail "graalpython : $GRAALPYTHON_TAG n'est plus $GRAALPYTHON_COMMIT"
 
 ### 2. Patches + source de l'instrument
 step "Application des patches"
@@ -94,6 +101,7 @@ JAVA_HOME=$(ls -d "$WORK"/jdks/labsjdk-*_amd64 | sort | tail -1)
 export JAVA_HOME
 if [ ! -d "$WORK/bootstrap" ]; then
     curl -fsSL -o "$WORK/bootstrap.tar.gz" "$BOOTSTRAP_URL"
+    echo "$BOOTSTRAP_SHA256  $WORK/bootstrap.tar.gz" | sha256sum -c --quiet - || fail "bootstrap GraalVM : sha256 différent de BOOTSTRAP_SHA256"
     # Extrait à côté puis renommé : une extraction interrompue n'est pas prise pour complète.
     rm -rf "$WORK/bootstrap.tmp" && mkdir "$WORK/bootstrap.tmp"
     tar -xzf "$WORK/bootstrap.tar.gz" -C "$WORK/bootstrap.tmp" --strip-components=1
