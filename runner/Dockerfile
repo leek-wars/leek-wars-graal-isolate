@@ -12,10 +12,10 @@ RUN apt-get update \
 RUN find / -xdev -type f -perm /6000 -exec chmod ug-s {} + \
  && mkdir -p /work \
  && chown runner /work
-# Machine partagée : build.sh attend (2 h au plus) que 20 Go, le tas du builder native-image,
-# soient disponibles avant de construire. Le build en prend un peu plus au pic : s'il manque
-# alors, c'est la compilation la première tuée (build.sh), pas un voisin.
-ENV WORK=/work LW_MIN_FREE_RAM_GB=20 LW_RAM_WAIT_MIN=120
+# Machine partagée : build.sh attend (2 h au plus) que 24 Go soient disponibles. Mesuré : un
+# build parti d'environ 20 Go a été tué par l'OOM de la machine après l'étape [7/8] de
+# native-image (première victime, cf. build.sh), un build parti de 25 Go est allé au bout.
+ENV WORK=/work LW_MIN_FREE_RAM_GB=24 LW_RAM_WAIT_MIN=120
 COPY --chmod=755 job-started.sh /runner-hooks/job-started.sh
 ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=/runner-hooks/job-started.sh
 COPY --chmod=755 entrypoint.sh /entrypoint-guard.sh

@@ -129,7 +129,7 @@ Le runner est un conteneur durable (`runner/Dockerfile`, lancé par `runner/run.
 l'image avant de le créer) :
 - aucun binaire setuid, `no-new-privileges`, pas de docker.sock ni de dossier de l'hôte, mémoire
   bornée, compilation première tuée si l'hôte en manque ; build retardé tant que la machine n'a pas
-  la RAM du tas native-image (`LW_MIN_FREE_RAM_GB`) ; deux volumes : l'arbre de build (builds
+  la RAM du build (`LW_MIN_FREE_RAM_GB`) ; deux volumes : l'arbre de build (builds
   incrémentaux) et l'enregistrement ; recréé à chaque `runner/run.sh` (le runner repart de la
   version de l'image et se remet à jour) ;
 - enregistré une fois par un jeton d'enregistrement du dépôt (valable une heure) ; il garde
