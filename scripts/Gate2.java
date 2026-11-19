@@ -11,7 +11,7 @@ import com.leekwars.generator.polyglot.StatementCounter;
  * Gate 2 du spike custom isolate : l'hote peut-il LIRE le compteur d'un instrument
  * embarque dans l'image isolate, et a quel cout ?
  *
- * Le lookup de service ne traverse pas la frontiere (verifie null) ; la lecture passe par
+ * Un service d'instrument ne traverse pas la frontiere ; la lecture passe par
  * les POLYGLOT BINDINGS : l'instrument publie un executable "lwStatementCounter"
  * (execute() = lire, execute(x) = reset) dans chaque contexte.
  */
@@ -80,15 +80,10 @@ public class Gate2 {
                 Value counter = ctx.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
                 if (counter == null) { System.out.println("FAIL [2]: binding absent"); System.exit(1); }
                 System.out.println("[2] OK: binding present, executable=" + counter.canExecute());
-                counter.execute("reset");
-                ctx.eval(Source.create("js", LOOP));
-                run1 = counter.execute().asLong();
+                run1 = count(ctx, counter, "js", LOOP);
             }
             try (Context ctx = Context.newBuilder("js").engine(engine).build()) {
-                Value counter = ctx.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
-                counter.execute("reset");
-                ctx.eval(Source.create("js", LOOP));
-                run2 = counter.execute().asLong();
+                run2 = count(ctx, ctx.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME), "js", LOOP);
             }
             boolean deterministic = run1 == run2 && run1 > 0;
             System.out.println("[3] run1=" + run1 + " run2=" + run2 + (deterministic ? " -> DETERMINISTE" : " -> KO"));
