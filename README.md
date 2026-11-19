@@ -99,8 +99,11 @@ exécuter des binaires depuis l'arbre de build :
    isolate → activation par **option** : `@Option` vide sur l'instrument →
    `.option("lw-statement-counter", "true")` sur l'Engine (comme cpusampler).
 3. **`ThreadLocal` est blocklisté** en compilation runtime native-image ("Blocklisted methods
-   are reachable for runtime compilation") → le compteur est un simple champ `long` (correct :
-   un engine = un combat = un thread ; et l'incrément se PE-compile en add).
+   are reachable for runtime compilation") → le compteur est un simple champ `long`, **un par
+   contexte** (`ContextLocal` de l'instrument) : l'engine est partagé par tous les combats du
+   worker, qui tournent en parallèle, et un contexte ne s'exécute que sur un thread à la fois.
+   Jusqu'à `combined-6`, un compteur unique par engine additionnait les statements de tous les
+   combats en cours (Gate2 [3b] le vérifie désormais).
 4. Le provider généré par le DSL doit être **`--initialize-at-build-time`** (package
    `com.leekwars.generator.polyglot`).
 5. **La policy sandbox valide l'instrument ET son option** : sans `sandbox = SandboxPolicy.ISOLATED`

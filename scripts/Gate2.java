@@ -38,9 +38,6 @@ public class Gate2 {
             System.out.println("[1] instruments = " + engine.getInstruments().keySet());
             Instrument instr = engine.getInstruments().get(StatementCounter.ID);
             if (instr == null) { System.out.println("FAIL [1]: instrument absent"); System.exit(1); }
-            // informatif : le lookup service ne marche pas sous isolate
-            System.out.println("[1b] lookup service (attendu null sous isolate) = "
-                    + instr.lookup(StatementCounter.Counter.class));
 
             long run1, run2;
             try (Context ctx = Context.newBuilder("js").engine(engine).build()) {
@@ -60,6 +57,28 @@ public class Gate2 {
             boolean deterministic = run1 == run2 && run1 > 0;
             System.out.println("[3] run1=" + run1 + " run2=" + run2 + (deterministic ? " -> DETERMINISTE" : " -> KO"));
             if (!deterministic) failures++;
+
+            // [3b] un compteur par contexte : l'engine est partage par des contextes qui tournent en
+            // parallele (un worker joue plusieurs combats a la fois). Chacun doit compter run1, ni
+            // plus (statements des autres) ni moins (remise a zero par un autre).
+            try (Context a = Context.newBuilder("js").engine(engine).build();
+                 Context b = Context.newBuilder("js").engine(engine).build()) {
+                Value ca = a.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
+                Value cb = b.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
+                ca.execute("reset");
+                cb.execute("reset");
+                b.eval(Source.create("js", LOOP));
+                long idle = ca.execute().asLong();
+                cb.execute("reset");
+                long[] counts = new long[2];
+                Thread ta = new Thread(() -> { a.eval(Source.create("js", LOOP)); counts[0] = ca.execute().asLong(); });
+                Thread tb = new Thread(() -> { b.eval(Source.create("js", LOOP)); counts[1] = cb.execute().asLong(); });
+                ta.start(); tb.start(); ta.join(); tb.join();
+                boolean isolated = idle == 0 && counts[0] == run1 && counts[1] == run1;
+                System.out.println("[3b] " + (isolated ? "OK" : "KO") + ": contexte inactif=" + idle
+                        + " paralleles=" + counts[0] + "/" + counts[1] + " (attendu 0 et " + run1 + ")");
+                if (!isolated) failures++;
+            }
 
             try (Context ctx = Context.newBuilder("js").engine(engine).build()) {
                 Value counter = ctx.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
