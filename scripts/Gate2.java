@@ -19,8 +19,44 @@ public class Gate2 {
 
     static final String LOOP = "var s = 0; for (var i = 0; i < 200000; i++) { s = s + 1; } s";
 
-    static Engine newIsolateEngine(boolean withCounter) {
-        Engine.Builder b = Engine.newBuilder("js")
+    static final String PY_LOOP = "s = 0\nfor i in range(200000):\n    s = s + 1\n";
+
+    static long count(Context ctx, Value counter, String lang, String code) {
+        counter.execute("reset");
+        ctx.eval(Source.create(lang, code));
+        return counter.execute().asLong();
+    }
+
+    /**
+     * [3b] un compteur par contexte : l'engine est partage par des contextes qui tournent en parallele
+     * (un worker joue plusieurs combats a la fois). Un contexte inactif doit lire 0, et deux contextes
+     * en parallele doivent compter chacun comme un contexte seul : ni plus (statements de l'autre) ni
+     * moins (remise a zero par l'autre).
+     */
+    static boolean countsPerContext(Engine engine, String lang, String code) throws InterruptedException {
+        try (Context a = Context.newBuilder(lang).engine(engine).build();
+             Context b = Context.newBuilder(lang).engine(engine).build()) {
+            Value ca = a.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
+            Value cb = b.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
+            // Echauffement : le 1er eval d'un contexte Python compte en plus son initialisation paresseuse.
+            a.eval(Source.create(lang, code));
+            b.eval(Source.create(lang, code));
+            ca.execute("reset");
+            long alone = count(b, cb, lang, code);
+            long idle = ca.execute().asLong();
+            long[] counts = new long[2];
+            Thread ta = new Thread(() -> counts[0] = count(a, ca, lang, code));
+            Thread tb = new Thread(() -> counts[1] = count(b, cb, lang, code));
+            ta.start(); tb.start(); ta.join(); tb.join();
+            boolean isolated = alone > 0 && idle == 0 && counts[0] == alone && counts[1] == alone;
+            System.out.println("[3b " + lang + "] " + (isolated ? "OK" : "KO") + ": contexte inactif=" + idle
+                    + " paralleles=" + counts[0] + "/" + counts[1] + " (attendu 0 et " + alone + ")");
+            return isolated;
+        }
+    }
+
+    static Engine newIsolateEngine(String lang, boolean withCounter) {
+        Engine.Builder b = Engine.newBuilder(lang)
                 .allowExperimentalOptions(true)
                 .option("engine.SpawnIsolate", "true")
                 .option("engine.MaxIsolateMemory", "1024MB");
@@ -34,7 +70,7 @@ public class Gate2 {
         int failures = 0;
         System.out.println("=== Gate 2 : lecture hote du StatementCounter sous isolate (via bindings) ===");
 
-        try (Engine engine = newIsolateEngine(true)) {
+        try (Engine engine = newIsolateEngine("js", true)) {
             System.out.println("[1] instruments = " + engine.getInstruments().keySet());
             Instrument instr = engine.getInstruments().get(StatementCounter.ID);
             if (instr == null) { System.out.println("FAIL [1]: instrument absent"); System.exit(1); }
@@ -58,27 +94,7 @@ public class Gate2 {
             System.out.println("[3] run1=" + run1 + " run2=" + run2 + (deterministic ? " -> DETERMINISTE" : " -> KO"));
             if (!deterministic) failures++;
 
-            // [3b] un compteur par contexte : l'engine est partage par des contextes qui tournent en
-            // parallele (un worker joue plusieurs combats a la fois). Chacun doit compter run1, ni
-            // plus (statements des autres) ni moins (remise a zero par un autre).
-            try (Context a = Context.newBuilder("js").engine(engine).build();
-                 Context b = Context.newBuilder("js").engine(engine).build()) {
-                Value ca = a.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
-                Value cb = b.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
-                ca.execute("reset");
-                cb.execute("reset");
-                b.eval(Source.create("js", LOOP));
-                long idle = ca.execute().asLong();
-                cb.execute("reset");
-                long[] counts = new long[2];
-                Thread ta = new Thread(() -> { a.eval(Source.create("js", LOOP)); counts[0] = ca.execute().asLong(); });
-                Thread tb = new Thread(() -> { b.eval(Source.create("js", LOOP)); counts[1] = cb.execute().asLong(); });
-                ta.start(); tb.start(); ta.join(); tb.join();
-                boolean isolated = idle == 0 && counts[0] == run1 && counts[1] == run1;
-                System.out.println("[3b] " + (isolated ? "OK" : "KO") + ": contexte inactif=" + idle
-                        + " paralleles=" + counts[0] + "/" + counts[1] + " (attendu 0 et " + run1 + ")");
-                if (!isolated) failures++;
-            }
+            if (!countsPerContext(engine, "js", LOOP)) failures++;
 
             try (Context ctx = Context.newBuilder("js").engine(engine).build()) {
                 Value counter = ctx.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
@@ -117,8 +133,13 @@ public class Gate2 {
             }
         }
 
+        // [3b] aussi en Python (tags poses par patches/graalpython.patch)
+        try (Engine engine = newIsolateEngine("python", true)) {
+            if (!countsPerContext(engine, "python", PY_LOOP)) failures++;
+        }
+
         // [5b] baseline : engine isolate SANS l'option -> instrument inactif
-        try (Engine engine = newIsolateEngine(false);
+        try (Engine engine = newIsolateEngine("js", false);
              Context ctx = Context.newBuilder("js").engine(engine).build()) {
             ctx.eval(Source.create("js", LOOP)); // warmup
             long t1 = System.nanoTime();
