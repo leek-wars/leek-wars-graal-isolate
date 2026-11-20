@@ -1,3 +1,156 @@
+diff --git a/graalpython/com.oracle.graal.python.pegparser/src/com/oracle/graal/python/pegparser/AbstractParser.java b/graalpython/com.oracle.graal.python.pegparser/src/com/oracle/graal/python/pegparser/AbstractParser.java
+index 75798b7..48d1e4d 100644
+--- a/graalpython/com.oracle.graal.python.pegparser/src/com/oracle/graal/python/pegparser/AbstractParser.java
++++ b/graalpython/com.oracle.graal.python.pegparser/src/com/oracle/graal/python/pegparser/AbstractParser.java
+@@ -492,6 +492,10 @@ public abstract class AbstractParser {
+             }
+             if (overunder) {
+                 // overflow
++                // Leek Wars : construction quadratique et sans safepoint, refusee avant au-dela du plafond.
++                if (lwExceedsBits(number, start, base, LW_MAX_INT_BITS)) {
++                    throw raiseSyntaxErrorKnownLocation(t, "integer literal too large (more than " + LW_MAX_INT_BITS + " bits)");
++                }
+                 BigInteger bigResult = BigInteger.valueOf(result);
+                 BigInteger bigBase = BigInteger.valueOf(base);
+                 while (i < number.length()) {
+@@ -506,6 +510,24 @@ public abstract class AbstractParser {
+         return factory.createConstant(ConstantValue.ofLong(result), t.sourceRange);
+     }
+ 
++    /**
++     * Leek Wars : taille maximale d'un entier Python, reprise par LwIntLimit.MAX_BITS. Les operations sur
++     * BigInteger ne passent par aucun safepoint : a 2^16 bits, aucune ne depasse quelques millisecondes.
++     */
++    public static final int LW_MAX_INT_BITS = 1 << 16;
++
++    /**
++     * Leek Wars : d chiffres significatifs (zeros de tete exclus, a partir de from) font au moins
++     * (d - 1) * floor(log2(base)) bits : au-dela de maxBits, la valeur les depasse forcement.
++     */
++    public static boolean lwExceedsBits(String s, int from, int base, int maxBits) {
++        int i = from;
++        while (i < s.length() && s.charAt(i) == '0') {
++            i++;
++        }
++        return (long) (s.length() - i - 1) * (31 - Integer.numberOfLeadingZeros(base)) > maxBits;
++    }
++
+     private static int digitValue(char ch) {
+         if (ch >= '0' && ch <= '9') {
+             return ch - '0';
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/BuiltinFunctions.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/BuiltinFunctions.java
+index 6c287f8..f45046a 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/BuiltinFunctions.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/BuiltinFunctions.java
+@@ -278,6 +278,7 @@ import com.oracle.graal.python.util.CharsetMapping;
+ import com.oracle.graal.python.util.OverflowException;
+ import com.oracle.graal.python.util.PythonUtils;
+ import com.oracle.graal.python.util.Supplier;
++import com.oracle.truffle.api.TruffleSafepoint;
+ import com.oracle.truffle.api.CallTarget;
+ import com.oracle.truffle.api.CompilerAsserts;
+ import com.oracle.truffle.api.CompilerDirectives;
+@@ -1899,6 +1900,7 @@ public final class BuiltinFunctions extends PythonBuiltins {
+                             @Shared @Cached InlinedConditionProfile resultFitsInInt) {
+                 long longResult = start;
+                 while (loopProfilePrimitive.profile(inliningTarget, iterator.hasNext())) {
++                    TruffleSafepoint.poll(inliningTarget); // Leek Wars : sum(range(10**12)) ne passe pas par PyIterNextNode
+                     long next = iterator.next();
+                     try {
+                         longResult = PythonUtils.addExact(longResult, next);
+@@ -1906,6 +1908,7 @@ public final class BuiltinFunctions extends PythonBuiltins {
+                         overflowProfile.enter(inliningTarget);
+                         Object objectResult = addNode.execute(frame, longResult, next);
+                         while (loopProfileGeneric.profile(inliningTarget, iterator.hasNext())) {
++                            TruffleSafepoint.poll(inliningTarget); // Leek Wars : sum(range(10**12)) ne passe pas par PyIterNextNode
+                             objectResult = addNode.execute(frame, objectResult, iterator.next());
+                         }
+                         return objectResult;
+@@ -1923,6 +1926,7 @@ public final class BuiltinFunctions extends PythonBuiltins {
+                             @Shared @Cached InlinedConditionProfile resultFitsInInt) {
+                 long longResult = start;
+                 while (loopProfilePrimitive.profile(inliningTarget, iterator.hasNext())) {
++                    TruffleSafepoint.poll(inliningTarget); // Leek Wars : sum(range(10**12)) ne passe pas par PyIterNextNode
+                     long next = iterator.next();
+                     try {
+                         longResult = PythonUtils.addExact(longResult, next);
+@@ -1930,6 +1934,7 @@ public final class BuiltinFunctions extends PythonBuiltins {
+                         overflowProfile.enter(inliningTarget);
+                         Object objectResult = addNode.execute(frame, longResult, next);
+                         while (loopProfileGeneric.profile(inliningTarget, iterator.hasNext())) {
++                            TruffleSafepoint.poll(inliningTarget); // Leek Wars : sum(range(10**12)) ne passe pas par PyIterNextNode
+                             objectResult = addNode.execute(frame, objectResult, iterator.next());
+                         }
+                         return objectResult;
+@@ -1950,6 +1955,7 @@ public final class BuiltinFunctions extends PythonBuiltins {
+                 }
+                 double result = startIsDouble.profile(inliningTarget, start instanceof Double) ? (double) start : (int) start;
+                 while (loopProfilePrimitive.profile(inliningTarget, iterator.hasNext())) {
++                    TruffleSafepoint.poll(inliningTarget); // Leek Wars : sum(range(10**12)) ne passe pas par PyIterNextNode
+                     result += iterator.next();
+                 }
+                 return result;
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/MathModuleBuiltins.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/MathModuleBuiltins.java
+index b56a70e..7ec3d08 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/MathModuleBuiltins.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/MathModuleBuiltins.java
+@@ -47,6 +47,7 @@ import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
+ import com.oracle.graal.python.builtins.objects.common.SequenceNodes;
+ import com.oracle.graal.python.builtins.objects.function.PKeyword;
+ import com.oracle.graal.python.builtins.objects.ints.IntBuiltins;
++import com.oracle.graal.python.builtins.objects.ints.LwIntLimit;
+ import com.oracle.graal.python.builtins.objects.ints.PInt;
+ import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+ import com.oracle.graal.python.builtins.objects.type.TpSlots;
+@@ -347,6 +348,13 @@ public final class MathModuleBuiltins extends PythonBuiltins {
+                         20922789888000L, 355687428096000L, 6402373705728000L,
+                         121645100408832000L, 2432902008176640000L};
+ 
++        /** Leek Wars : log2(n!) par Stirling, refuse avant le calcul (cf LwIntLimit). */
++        private static BigInteger factorial(long n) {
++            double ln = n * Math.log(n) - n + 0.5 * Math.log(2 * Math.PI * n);
++            LwIntLimit.checkBits(ln / Math.log(2) - 1);
++            return factorialPart(1, n);
++        }
++
+         @TruffleBoundary
+         private static BigInteger factorialPart(long start, long n) {
+             long i;
+@@ -375,7 +383,7 @@ public final class MathModuleBuiltins extends PythonBuiltins {
+         @Specialization(guards = {"value >= SMALL_FACTORIALS.length"})
+         static PInt factorialInt(int value,
+                         @Bind PythonLanguage language) {
+-            return PFactory.createInt(language, factorialPart(1, value));
++            return PFactory.createInt(language, factorial(value));
+         }
+ 
+         @Specialization(guards = {"value < 0"})
+@@ -392,7 +400,7 @@ public final class MathModuleBuiltins extends PythonBuiltins {
+         @Specialization(guards = {"value >= SMALL_FACTORIALS.length"})
+         static PInt factorialLong(long value,
+                         @Bind PythonLanguage language) {
+-            return PFactory.createInt(language, factorialPart(1, value));
++            return PFactory.createInt(language, factorial(value));
+         }
+ 
+         @Fallback
+@@ -445,6 +453,8 @@ public final class MathModuleBuiltins extends PythonBuiltins {
+                 result = result.multiply(factor);
+                 i = i.add(BigInteger.ONE);
+                 result = result.divide(i);
++                // Leek Wars : comb(n, i) croit avec i <= n/2, le resultat final depasserait aussi.
++                LwIntLimit.check(result);
+             }
+             return result;
+         }
+@@ -516,6 +526,7 @@ public final class MathModuleBuiltins extends PythonBuiltins {
+                 factor = factor.subtract(BigInteger.ONE);
+                 result = result.multiply(factor);
+                 i = i.add(BigInteger.ONE);
++                LwIntLimit.check(result); // Leek Wars : resultat croissant, cf comb
+             }
+             return result;
+         }
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/code/PCode.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/code/PCode.java
 index 084f871..ee6ef2c 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/code/PCode.java
@@ -11,6 +164,154 @@ index 084f871..ee6ef2c 100644
          return PFactory.createCode(language, rN, rN.getSignature(), codeUnit, getFilename());
      }
  
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/ints/IntBuiltins.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/ints/IntBuiltins.java
+index 477dfe3..39fe5f3 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/ints/IntBuiltins.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/ints/IntBuiltins.java
+@@ -1398,6 +1398,7 @@ public final class IntBuiltins extends PythonBuiltins {
+                 } else {
+                     bigModPos = bigMod;
+                 }
++                LwIntLimit.checkModPow(bigRight, bigModPos);
+                 try {
+                     BigInteger pow = bigLeft.modPow(bigRight, bigModPos);
+                     if (bigModPos != bigMod && !BigInteger.ZERO.equals(pow)) {
+@@ -1493,6 +1494,7 @@ public final class IntBuiltins extends PythonBuiltins {
+                 // exponent does not fit in an int, this is likely going to cause out-of-memory
+                 throw PRaiseNode.raiseStatic(this, PythonErrorType.ArithmeticError, ErrorMessages.EXPONENT_TOO_LARGE);
+             }
++            LwIntLimit.checkPow(a, b);
+             return a.pow((int) b);
+         }
+ 
+@@ -1897,6 +1899,7 @@ public final class IntBuiltins extends PythonBuiltins {
+ 
+         @TruffleBoundary
+         static BigInteger op(BigInteger left, int right) throws OverflowException {
++            LwIntLimit.checkShift(left, right);
+             try {
+                 return left.shiftLeft(right);
+             } catch (ArithmeticException ex) {
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/ints/LwIntLimit.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/ints/LwIntLimit.java
+new file mode 100644
+index 0000000..ff14fbf
+--- /dev/null
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/ints/LwIntLimit.java
+@@ -0,0 +1,81 @@
++/*
++ * Leek Wars : taille maximale d'un entier Python. Les operations sur BigInteger ne passent par aucun
++ * safepoint : l'interruption d'un tour ne les coupe pas, quelle que soit leur duree. A 2^16
++ * bits, aucune ne depasse quelques millisecondes. Les calculs dont le resultat est construit apres
++ * coup (pow, decalage, factorielle...) sont refuses avant, sur un minorant de leur taille.
++ */
++package com.oracle.graal.python.builtins.objects.ints;
++
++import static com.oracle.graal.python.runtime.exception.PythonErrorType.OverflowError;
++import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
++
++import java.math.BigInteger;
++
++import com.oracle.graal.python.nodes.PRaiseNode;
++import com.oracle.graal.python.pegparser.AbstractParser;
++import com.oracle.graal.python.runtime.exception.PException;
++import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
++import com.oracle.truffle.api.strings.TruffleString;
++
++public final class LwIntLimit {
++
++    private static final int MAX_BITS = AbstractParser.LW_MAX_INT_BITS;
++    /** pow(a, b, m) : bits(b) * bits(m), ~10 ms de modPow a ce plafond. */
++    private static final long MAX_MODPOW_WORK = 1L << 24;
++    private static final TruffleString TOO_LARGE = tsLiteral("integer too large (more than 65536 bits)");
++
++    private LwIntLimit() {
++    }
++
++    @TruffleBoundary
++    public static BigInteger check(BigInteger value) {
++        if (value.bitLength() > MAX_BITS) {
++            throw tooLarge();
++        }
++        return value;
++    }
++
++    /** |a| >= 2^(bitLength-1), donc a**e a au moins (bitLength-1)*e bits. */
++    @TruffleBoundary
++    public static void checkPow(BigInteger base, long exponent) {
++        if ((long) (base.abs().bitLength() - 1) * exponent > MAX_BITS) {
++            throw tooLarge();
++        }
++    }
++
++    @TruffleBoundary
++    public static void checkShift(BigInteger value, long shift) {
++        if (value.signum() != 0 && value.bitLength() + shift > MAX_BITS) {
++            throw tooLarge();
++        }
++    }
++
++    @TruffleBoundary
++    public static void checkModPow(BigInteger exponent, BigInteger modulus) {
++        if ((long) exponent.bitLength() * modulus.bitLength() > MAX_MODPOW_WORK) {
++            throw tooLarge();
++        }
++    }
++
++    /**
++     * Chaine de chiffres refusee avant le parsing (BigInteger(String) est quadratique, puissances de 2
++     * comprises, et la limite de chiffres de Python ne couvre pas ces bases).
++     */
++    public static void checkDigits(String digits, int base) {
++        if (AbstractParser.lwExceedsBits(digits, 0, base, MAX_BITS)) {
++            throw tooLarge();
++        }
++    }
++
++    /** Resultat d'au moins {@code bits} bits (minorant), refuse avant le calcul. */
++    public static void checkBits(double bits) {
++        if (bits > MAX_BITS) {
++            throw tooLarge();
++        }
++    }
++
++    @TruffleBoundary
++    private static PException tooLarge() {
++        throw PRaiseNode.raiseStatic(null, OverflowError, TOO_LARGE);
++    }
++}
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/ints/PInt.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/ints/PInt.java
+index ca134fc..25e24be 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/ints/PInt.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/ints/PInt.java
+@@ -74,7 +74,7 @@ public final class PInt extends PythonBuiltinObject {
+     public PInt(Object clazz, Shape instanceShape, BigInteger value) {
+         super(ensurePBCT(clazz), instanceShape);
+         assert value != null;
+-        this.value = value;
++        this.value = LwIntLimit.check(value);
+     }
+ 
+     private static Object ensurePBCT(Object clazz) {
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/random/RandomBuiltins.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/random/RandomBuiltins.java
+index 33b12a6..4c5f894 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/random/RandomBuiltins.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/random/RandomBuiltins.java
+@@ -49,6 +49,7 @@ import java.nio.ByteBuffer;
+ import java.nio.ByteOrder;
+ import java.util.List;
+ 
++import com.oracle.graal.python.builtins.objects.ints.LwIntLimit;
+ import com.oracle.graal.python.PythonLanguage;
+ import com.oracle.graal.python.annotations.ArgumentClinic;
+ import com.oracle.graal.python.annotations.ArgumentClinic.ClinicConversion;
+@@ -303,6 +304,7 @@ public final class RandomBuiltins extends PythonBuiltins {
+         @Specialization(guards = "k >= 64")
+         @TruffleBoundary
+         static PInt genBigInteger(PRandom random, int k) {
++            LwIntLimit.checkBits(k); // Leek Wars : k/32 tirages avant le plafond de PInt
+             int ints = ((k + 31) / 32);
+             ByteBuffer bb = ByteBuffer.wrap(new byte[4 * ints]).order(ByteOrder.BIG_ENDIAN);
+             for (int i = ints - 1; i > 0; --i) {
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java
 index 00eafcd..c0ae9fc 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java
@@ -108,6 +409,49 @@ index 00eafcd..c0ae9fc 100644
              b.endWhile();
  
              endTemporaryLocal(localIter, b);
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/lib/PyIterNextNode.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/lib/PyIterNextNode.java
+index f311dab..1e84bec 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/lib/PyIterNextNode.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/lib/PyIterNextNode.java
+@@ -48,6 +48,7 @@ import com.oracle.graal.python.nodes.PNodeWithContext;
+ import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
+ import com.oracle.graal.python.nodes.object.GetClassNode;
+ import com.oracle.graal.python.runtime.exception.PException;
++import com.oracle.truffle.api.TruffleSafepoint;
+ import com.oracle.truffle.api.dsl.Cached;
+ import com.oracle.truffle.api.dsl.GenerateInline;
+ import com.oracle.truffle.api.dsl.GenerateUncached;
+@@ -80,6 +81,10 @@ public abstract class PyIterNextNode extends PNodeWithContext {
+                     @Cached GetCachedTpSlotsNode getSlots,
+                     @Cached CallSlotTpIterNextNode callNext,
+                     @Cached IsBuiltinObjectProfile stopIterationProfile) {
++        // Leek Wars : les builtins qui consomment un iterateur (max, sum, list, sorted, join...)
++        // bouclent en Java sans point de surete tant qu'ils ne sont pas compiles :
++        // max(iter(range(10**10))) ne rendait jamais la main a l'interruption du tour.
++        TruffleSafepoint.poll(inliningTarget);
+         TpSlots slots = getSlots.execute(inliningTarget, getClassNode.execute(inliningTarget, iterator));
+         assert slots.tp_iternext() != null;
+         try {
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/lib/PyLongFromUnicodeObject.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/lib/PyLongFromUnicodeObject.java
+index 363f4d9..464ad0c 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/lib/PyLongFromUnicodeObject.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/lib/PyLongFromUnicodeObject.java
+@@ -42,6 +42,7 @@ package com.oracle.graal.python.lib;
+ 
+ import java.math.BigInteger;
+ 
++import com.oracle.graal.python.builtins.objects.ints.LwIntLimit;
+ import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+ import com.oracle.graal.python.builtins.modules.SysModuleBuiltins;
+ import com.oracle.graal.python.builtins.objects.bytes.BytesNodes;
+@@ -240,6 +241,7 @@ public abstract class PyLongFromUnicodeObject extends Node {
+             s = s.replace("_", "");
+ 
+             checkMaxDigits(inliningTarget, context, s.length(), base);
++            LwIntLimit.checkDigits(s, base);
+ 
+             BigInteger bi;
+             if (sign == '-') {
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java
 index f9fc7cb..a11cda0 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java

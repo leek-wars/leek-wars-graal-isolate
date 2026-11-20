@@ -84,6 +84,9 @@ git -C "$WORK/graalpython" checkout -q "$GRAALPYTHON_COMMIT" || fail "graalpytho
 ### 2. Patches + source de l'instrument
 step "Application des patches"
 git -C "$WORK/graal" checkout -q -- . && git -C "$WORK/graal" apply "$PWD/patches/graal.patch"
+# LwIntLimit.java, cree par graalpython.patch : apres un run interrompu, checkout ne le retire pas et
+# apply le refuserait. Seulement les sources patchees, pas les sorties de build.
+git -C "$WORK/graalpython" clean -fdq -- graalpython/com.oracle.graal.python/src
 git -C "$WORK/graaljs" checkout -q -- . && git -C "$WORK/graaljs" apply "$PWD/patches/graaljs.patch"
 # Comptage des operations Python par EXPRESSION (Tag(Expression) sur les operateurs, appels,
 # acces, litteraux, iterations de comprehension) : GraalPy ne tague que les statements.

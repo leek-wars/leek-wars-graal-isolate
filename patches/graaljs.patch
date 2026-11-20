@@ -70,3 +70,541 @@ index 21277d9e..d30031aa 100644
      "GRAALJS" : {
        "moduleInfo" : {
          "name" : "org.graalvm.js",
+diff --git a/graal-js/src/com.oracle.js.parser/src/com/oracle/js/parser/Lexer.java b/graal-js/src/com.oracle.js.parser/src/com/oracle/js/parser/Lexer.java
+index 8cbbacb0..4e33f475 100644
+--- a/graal-js/src/com.oracle.js.parser/src/com/oracle/js/parser/Lexer.java
++++ b/graal-js/src/com.oracle.js.parser/src/com/oracle/js/parser/Lexer.java
+@@ -1303,7 +1303,7 @@ public final class Lexer extends Scanner implements StringPool {
+             // (CWirth) added by Oracle Labs Graal.js
+             if (radix == 16 && valueString.length() >= 15) {
+                 // special case to parse large hex values; see testv8/hex-parsing.js
+-                return (new BigInteger(valueString, 16)).doubleValue();
++                return lwParseForDouble(valueString, 16).doubleValue(); // Leek Wars
+             }
+ 
+             double value = 0.0;
+@@ -1320,25 +1320,58 @@ public final class Lexer extends Scanner implements StringPool {
+         }
+     }
+ 
++    /**
++     * Leek Wars : taille maximale d'un BigInt (V8 : 2^30 bits), reprise par BigInt.LW_MAX_BITS. Les
++     * operations sur BigInteger ne passent par aucun safepoint : a 2^16 bits, aucune ne depasse quelques
++     * millisecondes.
++     */
++    public static final int LW_MAX_BIGINT_BITS = 1 << 16;
++
+     private static BigInteger valueOfBigInt(final String string) {
+         String valueString = removeUnderscores(string);
+         if (valueString.length() > 2 && valueString.charAt(0) == '0') {
+             switch (valueString.charAt(1)) {
+                 case 'x':
+                 case 'X':
+-                    return new BigInteger(valueString.substring(2), 16);
++                    return lwParse(valueString.substring(2), 16, LW_MAX_BIGINT_BITS);
+                 case 'o':
+                 case 'O':
+-                    return new BigInteger(valueString.substring(2), 8);
++                    return lwParse(valueString.substring(2), 8, LW_MAX_BIGINT_BITS);
+                 case 'b':
+                 case 'B':
+-                    return new BigInteger(valueString.substring(2), 2);
++                    return lwParse(valueString.substring(2), 2, LW_MAX_BIGINT_BITS);
+                 default:
+-                    return new BigInteger(valueString, 10);
++                    return lwParse(valueString, 10, LW_MAX_BIGINT_BITS);
+             }
+         } else {
+-            return new BigInteger(valueString, 10);
++            return lwParse(valueString, 10, LW_MAX_BIGINT_BITS);
++        }
++    }
++
++    /**
++     * Leek Wars : BigInteger(String) est quadratique et sans safepoint. Un nombre de d chiffres
++     * significatifs (zeros de tete exclus, a partir de from) a au moins (d - 1) * floor(log2(radix))
++     * bits : au-dela de maxBits, il les depasse forcement, sans avoir a le parser.
++     */
++    public static boolean lwExceedsBits(String s, int from, int radix, int maxBits) {
++        int i = from;
++        while (i < s.length() && s.charAt(i) == '0') {
++            i++;
++        }
++        return (long) (s.length() - i - 1) * (31 - Integer.numberOfLeadingZeros(radix)) > maxBits;
++    }
++
++    /** Leek Wars : parse pour un double (ToNumber, litteral) ; au-dela de 1100 bits, Infinity sans parser. */
++    public static BigInteger lwParseForDouble(String digits, int radix) {
++        return lwParse(digits, radix, 1100);
++    }
++
++    /** Leek Wars : au-dela de maxBits, une valeur qui les depasse, sans parsing (cf lwExceedsBits). */
++    private static BigInteger lwParse(String digits, int radix, int maxBits) {
++        if (lwExceedsBits(digits, 0, radix, maxBits)) {
++            return BigInteger.ONE.shiftLeft(maxBits + 1);
+         }
++        return new BigInteger(digits, radix);
+     }
+ 
+     /**
+diff --git a/graal-js/src/com.oracle.truffle.js.parser/src/com/oracle/truffle/js/parser/GraalJSEvaluator.java b/graal-js/src/com.oracle.truffle.js.parser/src/com/oracle/truffle/js/parser/GraalJSEvaluator.java
+index 00c134e5..08d33888 100644
+--- a/graal-js/src/com.oracle.truffle.js.parser/src/com/oracle/truffle/js/parser/GraalJSEvaluator.java
++++ b/graal-js/src/com.oracle.truffle.js.parser/src/com/oracle/truffle/js/parser/GraalJSEvaluator.java
+@@ -160,6 +160,7 @@ public final class GraalJSEvaluator implements JSParser {
+     @TruffleBoundary(transferToInterpreterOnException = false)
+     @Override
+     public ScriptNode parseFunction(JSContext context, String parameterList, String body, boolean generatorFunction, boolean asyncFunction, String sourceName, ScriptOrModule activeScriptOrModule) {
++        lwCheckEvalSource((long) parameterList.length() + body.length());
+         String wrappedBody = "\n" + body + "\n";
+         try {
+             GraalJSParserHelper.checkFunctionSyntax(context, context.getParserOptions(), parameterList, wrappedBody, generatorFunction, asyncFunction, sourceName);
+@@ -206,6 +207,7 @@ public final class GraalJSEvaluator implements JSParser {
+     @TruffleBoundary(transferToInterpreterOnException = false)
+     private static ScriptNode parseEval(JSContext context, Node lastNode, Source source, boolean isStrict, DirectEvalContext directEval, ScriptOrModule activeScriptOrModule) {
+         context.checkEvalAllowed();
++        lwCheckEvalSource(source.getLength());
+         NodeFactory nodeFactory = NodeFactory.getInstance(context);
+         try {
+             return JavaScriptTranslator.translateEvalScript(nodeFactory, context, source, isStrict, directEval, activeScriptOrModule);
+@@ -242,12 +244,26 @@ public final class GraalJSEvaluator implements JSParser {
+     public ScriptNode evalCompile(JSContext context, String sourceCode, String name) {
+         try {
+             context.checkEvalAllowed();
++            lwCheckEvalSource(sourceCode.length());
+             return JavaScriptTranslator.translateScript(NodeFactory.getInstance(context), context, Source.newBuilder(JavaScriptLanguage.ID, sourceCode, name).build(), false, "", "");
+         } catch (com.oracle.js.parser.ParserException e) {
+             throw Errors.createSyntaxError(e, context);
+         }
+     }
+ 
++    /**
++     * Leek Wars : taille maximale d'une source evaluee a l'execution (eval, Function, load({script})).
++     * Le parseur ne passe par aucun safepoint : l'interruption ne le coupe pas, 16 Mo l'occupent ~20 s.
++     * 1 Mo, la taille maximale d'un fichier d'IA, borne ce parsing a environ une seconde.
++     */
++    private static final int LW_MAX_EVAL_SOURCE_CHARS = 1 << 20;
++
++    private static void lwCheckEvalSource(long length) {
++        if (length > LW_MAX_EVAL_SOURCE_CHARS) {
++            throw Errors.createRangeError("Source too long to evaluate (" + length + " > " + LW_MAX_EVAL_SOURCE_CHARS + " characters)");
++        }
++    }
++
+     // JSParser methods below
+ 
+     @TruffleBoundary
+diff --git a/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/builtins/ArrayPrototypeBuiltins.java b/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/builtins/ArrayPrototypeBuiltins.java
+index 51a234e4..b383636e 100644
+--- a/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/builtins/ArrayPrototypeBuiltins.java
++++ b/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/builtins/ArrayPrototypeBuiltins.java
+@@ -193,6 +193,9 @@ import com.oracle.truffle.js.runtime.util.StringBuilderProfile;
+ 
+ /**
+  * Contains builtins for {@linkplain JSArray}.prototype.
++ *
++ * Leek Wars : les TruffleSafepoint.poll marques « // Leek Wars » rendent interruptibles les boucles sur
++ * une longueur (2^53 - 1 pour un array-like vide), qui ne passaient par aucun point de surete.
+  */
+ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum<ArrayPrototypeBuiltins.ArrayPrototype> {
+ 
+@@ -1045,6 +1048,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+                 Object firstElement = read(thisObj, 0);
+ 
+                 for (long i = 0; i < len - 1; i++) {
++                    TruffleSafepoint.poll(this); // Leek Wars
+                     if (hasProperty(thisObj, i + 1)) {
+                         write(thisObj, i, read(thisObj, i + 1));
+                     } else {
+@@ -1072,6 +1076,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+                 Object firstElement = read(thisObj, 0);
+                 long count = 0;
+                 for (long i = firstElementIndexNode.executeLong(thisObj, len); i <= lastElementIndexNode.executeLong(thisObj, len); i = nextElementIndex(thisObj, i, len)) {
++                    TruffleSafepoint.poll(this); // Leek Wars
+                     if (i > 0) {
+                         write(thisObj, i - 1, read(thisObj, i));
+                     }
+@@ -1103,6 +1108,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+ 
+             Object firstObj = read(thisJSObj, 0);
+             for (long i = 1; i < len; i++) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 if (hasProperty(thisJSObj, i)) {
+                     write(thisJSObj, i - 1, read(thisObj, i));
+                 } else {
+@@ -1128,6 +1134,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+             try {
+                 Object firstObj = arrays.readArrayElement(thisObj, 0);
+                 for (long i = 1; i < len; i++) {
++                    TruffleSafepoint.poll(this); // Leek Wars
+                     Object val = arrays.readArrayElement(thisObj, i);
+                     arrays.writeArrayElement(thisObj, i - 1, val);
+                 }
+@@ -1157,6 +1164,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+             long len = getLength(thisObj);
+             if (getContext().getEcmaScriptVersion() <= 5 || args.length > 0) {
+                 for (long l = len - 1; l >= 0; l--) {
++                    TruffleSafepoint.poll(this); // Leek Wars
+                     write(thisObj, l + args.length, read(thisObj, l));
+                 }
+                 for (int i = 0; i < args.length; i++) {
+@@ -1202,6 +1210,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+                 long firstIdx = firstElementIndexNode.executeLong(thisObj, len);
+                 long count = 0;
+                 for (long i = lastIdx; i >= firstIdx; i = previousElementIndex(thisObj, i)) {
++                    TruffleSafepoint.poll(this); // Leek Wars
+                     count++;
+                     if (hasProperty(thisObj, i)) {
+                         write(thisObj, i + args.length, read(thisObj, i));
+@@ -1437,6 +1446,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+             if (optimizationsObservable.profile(this, JSProxy.isJSProxy(elObj) || !JSDynamicObject.isJSDynamicObject(elObj))) {
+                 // strictly to the standard implementation; traps could expose optimizations!
+                 for (long k = 0; k < len2; k++) {
++                    TruffleSafepoint.poll(this); // Leek Wars
+                     if (hasProperty(elObj, k)) {
+                         writeOwn(retObj, n + k, read(elObj, k));
+                     }
+@@ -1450,6 +1460,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+                 long k = firstElementIndex((JSDynamicObject) elObj, len2);
+                 long lastI = lastElementIndex((JSDynamicObject) elObj, len2);
+                 for (; k <= lastI; k = nextElementIndex(elObj, k, len2)) {
++                    TruffleSafepoint.poll(this); // Leek Wars
+                     writeOwn(retObj, n + k, read(elObj, k));
+                 }
+             }
+@@ -1780,6 +1791,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+                 TruffleString value = (TruffleString) converted.get(j + 1);
+                 if (appendSep) {
+                     for (long k = lastIndex; k < index; k++) {
++                        TruffleSafepoint.poll(this); // Leek Wars
+                         append(sb, joinSeparator);
+                     }
+                 }
+@@ -1788,6 +1800,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+             }
+             if (appendSep) {
+                 for (long k = lastIndex; k < length - 1; k++) {
++                    TruffleSafepoint.poll(this); // Leek Wars
+                     append(sb, joinSeparator);
+                 }
+                 reportLoopCount(length);
+@@ -1997,6 +2010,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+                 kPlusStart = nextElementIndex(thisObj, kPlusStart, deleteEnd);
+             }
+             while (kPlusStart < deleteEnd) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 Object fromValue = read(thisObj, kPlusStart);
+                 writeOwn(aObj, kPlusStart - actualStart, fromValue);
+                 kPlusStart = nextElementIndex(thisObj, kPlusStart, deleteEnd);
+@@ -2022,15 +2036,18 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+ 
+         private void spliceJSObjectMove(JSObject thisObj, long len, long actualStart, long actualDeleteCount, long itemCount) {
+             for (long k = len - actualDeleteCount; k > actualStart; k--) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 spliceMoveValue(thisObj, (k + actualDeleteCount - 1), (k + itemCount - 1));
+             }
+         }
+ 
+         private void spliceJSObjectShrink(JSObject thisObj, long len, long actualStart, long actualDeleteCount, long itemCount) {
+             for (long k = actualStart; k < len - actualDeleteCount; k++) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 spliceMoveValue(thisObj, (k + actualDeleteCount), (k + itemCount));
+             }
+             for (long k = len; k > len - actualDeleteCount + itemCount; k--) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 deletePropertyNode.executeEvaluated(thisObj, k - 1);
+             }
+         }
+@@ -2057,6 +2074,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+ 
+         private void spliceJSArrayElementwiseWalkDown(JSArrayObject thisObj, long len, long actualStart, long actualDeleteCount, long itemCount) {
+             for (long k = len - actualDeleteCount - 1; k >= actualStart; k--) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 long from = k + actualDeleteCount;
+                 long to = k + itemCount;
+                 spliceMoveValue(thisObj, from, to);
+@@ -2065,12 +2083,14 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+ 
+         private void spliceJSArrayElementwiseWalkUp(JSArrayObject thisObj, long len, long actualStart, long actualDeleteCount, long itemCount) {
+             for (long k = actualStart; k < len - actualDeleteCount; k++) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 long from = k + actualDeleteCount;
+                 long to = k + itemCount;
+                 spliceMoveValue(thisObj, from, to);
+             }
+ 
+             for (long k = len - 1; k >= len - actualDeleteCount + itemCount; k--) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 deletePropertyNode.executeEvaluated(thisObj, k);
+             }
+         }
+@@ -2107,6 +2127,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+         private static void spliceForeignArrayMove(Object thisObj, long len, long actualStart, long actualDeleteCount, long itemCount, InteropLibrary arrays)
+                         throws UnsupportedMessageException, InvalidArrayIndexException, UnsupportedTypeException {
+             for (long k = len - actualDeleteCount; k > actualStart; k--) {
++                TruffleSafepoint.poll(null); // Leek Wars
+                 spliceForeignMoveValue(thisObj, (k + actualDeleteCount - 1), (k + itemCount - 1), arrays);
+             }
+         }
+@@ -2114,9 +2135,11 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+         private static void spliceForeignArrayShrink(Object thisObj, long len, long actualStart, long actualDeleteCount, long itemCount, InteropLibrary arrays)
+                         throws UnsupportedMessageException, InvalidArrayIndexException, UnsupportedTypeException {
+             for (long k = actualStart; k < len - actualDeleteCount; k++) {
++                TruffleSafepoint.poll(null); // Leek Wars
+                 spliceForeignMoveValue(thisObj, (k + actualDeleteCount), (k + itemCount), arrays);
+             }
+             for (long k = len; k > len - actualDeleteCount + itemCount; k--) {
++                TruffleSafepoint.poll(null); // Leek Wars
+                 arrays.removeArrayElement(thisObj, k - 1);
+             }
+         }
+@@ -2557,6 +2580,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+             Object callbackFn = checkCallbackIsFunction(callback);
+             long idx = isLast ? length - 1 : 0;
+             while (isLast ? idx >= 0 : idx < length) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 Object value = read(thisObj, idx);
+                 Object callbackResult = callPredicate(callbackFn, thisArg, value, idx, thisJSObj);
+                 boolean testResult = toBooleanNode.executeBoolean(callbackResult);
+@@ -2592,6 +2616,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+             Object callbackFn = checkCallbackIsFunction(callback);
+             long idx = isLast ? length - 1 : 0;
+             while (isLast ? idx >= 0 : idx < length) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 Object value = read(thisObj, idx);
+                 Object callbackResult = callPredicate(callbackFn, thisArg, value, idx, thisJSObj);
+                 boolean testResult = toBooleanNode.executeBoolean(callbackResult);
+@@ -2617,6 +2642,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+             long length = getLength(thisJSObj);
+             Object result = createEmpty(thisJSObj, length);
+             for (long i = 0; i < length; i++) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 var value = read(thisJSObj, length - 1 - i);
+                 write(result, i, value);
+             }
+@@ -2787,6 +2813,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+         private static Object[] jsobjectToArray(JSDynamicObject thisObj, long len, boolean skipHoles, Node node, InlinedBranchProfile growProfile) {
+             SimpleArrayList<Object> list = SimpleArrayList.create(len);
+             for (long k = 0; k < len; k++) {
++                TruffleSafepoint.poll(node); // Leek Wars
+                 if (!skipHoles || JSObject.hasProperty(thisObj, k)) {
+                     list.add(JSObject.get(thisObj, k), node, growProfile);
+                 }
+@@ -2830,6 +2857,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+          */
+         private void deleteGenericElements(Object obj, long fromIndex, long toIndex) {
+             for (long index = fromIndex; index < toIndex; index++) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 delete(obj, index);
+             }
+         }
+@@ -3256,10 +3284,12 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+         private void spliceJSObject(JSArrayObject dstObj, Object srcObj, long len, long actualStart, long actualDeleteCount, Object[] args) {
+             long dstIdx = 0;
+             for (long srcIdx = 0; srcIdx < actualStart; srcIdx++) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 writeOwn(dstObj, dstIdx++, read(srcObj, srcIdx));
+             }
+             dstIdx = spliceInsert(dstObj, dstIdx, args);
+             for (long srcIdx = actualStart + actualDeleteCount; srcIdx < len; srcIdx++) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 writeOwn(dstObj, dstIdx++, read(srcObj, srcIdx));
+             }
+         }
+@@ -3272,10 +3302,12 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+             }
+             long dstIdx = 0;
+             for (long srcIdx = 0; srcIdx < actualStart; srcIdx++) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 spliceForeignMoveValue(dstObj, srcObj, srcIdx, dstIdx++, arrays);
+             }
+             dstIdx = spliceInsert(dstObj, dstIdx, args);
+             for (long srcIdx = actualStart + actualDeleteCount; srcIdx < len; srcIdx++) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 spliceForeignMoveValue(dstObj, srcObj, srcIdx, dstIdx++, arrays);
+             }
+         }
+@@ -3345,6 +3377,7 @@ public final class ArrayPrototypeBuiltins extends JSBuiltinsContainer.SwitchEnum
+ 
+             long k;
+             for (k = 0; k < len; k++) {
++                TruffleSafepoint.poll(this); // Leek Wars
+                 Object val;
+                 if (k == actualIndex) {
+                     val = value;
+diff --git a/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/nodes/access/ForEachIndexCallNode.java b/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/nodes/access/ForEachIndexCallNode.java
+index 82de2779..cb4046fe 100644
+--- a/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/nodes/access/ForEachIndexCallNode.java
++++ b/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/nodes/access/ForEachIndexCallNode.java
+@@ -260,6 +260,9 @@ public abstract class ForEachIndexCallNode extends JavaScriptBaseNode {
+             boolean isForeign = JSRuntime.isForeignObject(target);
+             boolean isForeignArray = isForeign && getInterop().hasArrayElements(target);
+             for (long index = fromIndex; index < length; index++) {
++                // Leek Wars : un objet array-like vide de longueur 2^53 ne passe jamais par le callback
++                // (seul point de surete) : l'interruption du tour n'atterrissait pas.
++                TruffleSafepoint.poll(this);
+                 if (!checkHasProperty || hasProperty(target, index)) {
+                     Object value = getElement(target, index, isForeign, isForeignArray);
+                     Object callbackResult = callback(index, value, target, callback, callbackThisArg, currentResult);
+@@ -322,6 +325,9 @@ public abstract class ForEachIndexCallNode extends JavaScriptBaseNode {
+             boolean isForeign = JSRuntime.isForeignObject(target);
+             boolean isForeignArray = isForeign && getInterop().hasArrayElements(target);
+             for (long index = fromIndex; index >= 0; index--) {
++                // Leek Wars : un objet array-like vide de longueur 2^53 ne passe jamais par le callback
++                // (seul point de surete) : l'interruption du tour n'atterrissait pas.
++                TruffleSafepoint.poll(this);
+                 if (!checkHasProperty || hasProperty(target, index)) {
+                     Object value = getElement(target, index, isForeign, isForeignArray);
+                     Object callbackResult = callback(index, value, target, callback, callbackThisArg, currentResult);
+diff --git a/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/nodes/cast/JSToObjectArrayNode.java b/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/nodes/cast/JSToObjectArrayNode.java
+index ec7db674..2491cbf1 100644
+--- a/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/nodes/cast/JSToObjectArrayNode.java
++++ b/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/nodes/cast/JSToObjectArrayNode.java
+@@ -42,6 +42,7 @@ package com.oracle.truffle.js.nodes.cast;
+ 
+ import java.util.Set;
+ 
++import com.oracle.truffle.api.TruffleSafepoint;
+ import com.oracle.truffle.api.dsl.Bind;
+ import com.oracle.truffle.api.dsl.Cached;
+ import com.oracle.truffle.api.dsl.Cached.Shared;
+@@ -142,6 +143,7 @@ public abstract class JSToObjectArrayNode extends JavaScriptBaseNode {
+ 
+         Object[] arr = new Object[iLen];
+         for (int index = 0; index < iLen; index++) {
++            TruffleSafepoint.poll(node); // Leek Wars : array-like de longueur 2^30, cf ArrayPrototypeBuiltins
+             Object value = readNode.executeWithTargetAndIndex(obj, index);
+             arr[index] = value;
+         }
+diff --git a/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/runtime/BigInt.java b/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/runtime/BigInt.java
+index d9f184e7..89c9e196 100644
+--- a/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/runtime/BigInt.java
++++ b/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/runtime/BigInt.java
+@@ -43,6 +43,7 @@ package com.oracle.truffle.js.runtime;
+ import java.math.BigDecimal;
+ import java.math.BigInteger;
+ 
++import com.oracle.js.parser.Lexer;
+ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+ import com.oracle.truffle.api.CompilerDirectives.ValueType;
+ import com.oracle.truffle.api.interop.InteropLibrary;
+@@ -71,8 +72,28 @@ public final class BigInt implements Comparable<BigInt>, TruffleObject {
+ 
+     private static final BigInteger TWO64 = BigInteger.ONE.shiftLeft(64);
+ 
++    /** Leek Wars : taille maximale d'un BigInt, cf Lexer.LW_MAX_BIGINT_BITS. */
++    public static final int LW_MAX_BITS = Lexer.LW_MAX_BIGINT_BITS;
++
+     public BigInt(BigInteger v) {
+-        this(v, false);
++        this(lwCheckSize(v), false);
++    }
++
++    @TruffleBoundary
++    private static BigInteger lwCheckSize(BigInteger v) {
++        if (v.bitLength() > LW_MAX_BITS) {
++            throw Errors.createRangeErrorBigIntMaxSizeExceeded();
++        }
++        return v;
++    }
++
++    @TruffleBoundary
++    private static BigInteger lwParse(String s, int from, int radix) {
++        // Leek Wars : parsing quadratique, refuse avant au-dela du plafond.
++        if (Lexer.lwExceedsBits(s, from, radix, LW_MAX_BITS)) {
++            throw Errors.createRangeErrorBigIntMaxSizeExceeded();
++        }
++        return new BigInteger(s.substring(from), radix);
+     }
+ 
+     private BigInt(BigInteger v, boolean foreign) {
+@@ -128,28 +149,28 @@ public final class BigInt implements Comparable<BigInt>, TruffleObject {
+                 switch (trimmedString.charAt(1)) {
+                     case 'x', 'X' -> {
+                         if (JSRuntime.isHex(trimmedString.charAt(2))) {
+-                            return new BigInteger(trimmedString.substring(2), 16);
++                            return lwParse(trimmedString, 2, 16);
+                         }
+                     }
+                     case 'o', 'O' -> {
+                         if (JSRuntime.valueInRadix(trimmedString.charAt(2), 8) != -1) {
+-                            return new BigInteger(trimmedString.substring(2), 8);
++                            return lwParse(trimmedString, 2, 8);
+                         }
+                     }
+                     case 'b', 'B' -> {
+                         if (JSRuntime.valueInRadix(trimmedString.charAt(2), 2) != -1) {
+-                            return new BigInteger(trimmedString.substring(2), 2);
++                            return lwParse(trimmedString, 2, 2);
+                         }
+                     }
+                     default -> {
+-                        return new BigInteger(trimmedString, 10);
++                        return lwParse(trimmedString, 0, 10);
+                     }
+                 }
+             } else if (trimmedString.length() == 1) {
+                 return BigInteger.ZERO;
+             }
+         }
+-        return new BigInteger(trimmedString, 10);
++        return lwParse(trimmedString, 0, 10);
+     }
+ 
+     @TruffleBoundary
+@@ -183,6 +204,10 @@ public final class BigInt implements Comparable<BigInt>, TruffleObject {
+ 
+     @TruffleBoundary
+     public BigInt pow(int e) {
++        // Leek Wars : |a| >= 2^(bitLength-1), donc a^e a au moins (bitLength-1)*e bits ; refuse avant de calculer.
++        if ((long) (value.abs().bitLength() - 1) * e > LW_MAX_BITS) {
++            throw new ArithmeticException("BigInt too large");
++        }
+         return new BigInt(value.pow(e));
+     }
+ 
+@@ -338,6 +363,10 @@ public final class BigInt implements Comparable<BigInt>, TruffleObject {
+ 
+     @TruffleBoundary
+     public BigInt shiftLeft(int b) {
++        // Leek Wars : le resultat serait alloue avant le plafond du constructeur.
++        if (value.signum() != 0 && (long) value.bitLength() + b > LW_MAX_BITS) {
++            throw new ArithmeticException("BigInt too large");
++        }
+         return new BigInt(value.shiftLeft(b));
+     }
+ 
+diff --git a/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/runtime/JSRuntime.java b/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/runtime/JSRuntime.java
+index 78025a0c..86f955f9 100644
+--- a/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/runtime/JSRuntime.java
++++ b/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/runtime/JSRuntime.java
+@@ -1843,6 +1843,8 @@ public final class JSRuntime {
+             return Strings.parseBigInt(s);
+         } catch (NumberFormatException e) {
+             return null;
++        } catch (JSException e) {
++            return null; // Leek Wars : au-dela du plafond de BigInt (BigInt.LW_MAX_BITS), pas de conversion
+         }
+     }
+ 
+diff --git a/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/runtime/Strings.java b/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/runtime/Strings.java
+index e68fea60..78cbb299 100644
+--- a/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/runtime/Strings.java
++++ b/graal-js/src/com.oracle.truffle.js/src/com/oracle/truffle/js/runtime/Strings.java
+@@ -46,6 +46,7 @@ import java.util.Locale;
+ 
+ import org.graalvm.shadowed.com.ibm.icu.text.CaseMap;
+ 
++import com.oracle.js.parser.Lexer;
+ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+ import com.oracle.truffle.api.interop.InteropLibrary;
+ import com.oracle.truffle.api.interop.UnsupportedMessageException;
+@@ -936,7 +937,7 @@ public final class Strings {
+     }
+ 
+     public static BigInteger parseBigInteger(TruffleString s, int radix) {
+-        return new BigInteger(toJavaString(s), radix);
++        return Lexer.lwParseForDouble(toJavaString(s), radix); // Leek Wars : pas de parsing quadratique
+     }
+ 
+     public static TruffleStringBuilderUTF16 builderCreate() {
