@@ -151,6 +151,122 @@ index b56a70e..7ec3d08 100644
              }
              return result;
          }
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/TimeModuleBuiltins.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/TimeModuleBuiltins.java
+index a09bafc..33a399a 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/TimeModuleBuiltins.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/TimeModuleBuiltins.java
+@@ -51,6 +51,7 @@ import java.util.GregorianCalendar;
+ import java.util.List;
+ import java.util.TimeZone;
+ 
++import com.oracle.graal.python.builtins.objects.thread.LwNoWait;
+ import com.oracle.graal.python.PythonLanguage;
+ import com.oracle.graal.python.annotations.ArgumentClinic;
+ import com.oracle.graal.python.annotations.Builtin;
+@@ -97,7 +98,6 @@ import com.oracle.graal.python.runtime.object.PFactory;
+ import com.oracle.graal.python.util.PythonUtils;
+ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+ import com.oracle.truffle.api.TruffleOptions;
+-import com.oracle.truffle.api.TruffleSafepoint;
+ import com.oracle.truffle.api.dsl.Bind;
+ import com.oracle.truffle.api.dsl.Cached;
+ import com.oracle.truffle.api.dsl.Cached.Exclusive;
+@@ -118,7 +118,6 @@ import com.oracle.truffle.api.strings.TruffleString.ToJavaStringNode;
+ 
+ @CoreFunctions(defineModule = "time")
+ public final class TimeModuleBuiltins extends PythonBuiltins {
+-    private static final int DELAY_NANOS = 10;
+     private static final String CTIME_FORMAT = "%s %s %2d %02d:%02d:%02d %d";
+     private static final ZoneId GMT = ZoneId.of("GMT");
+     private static final TruffleString T_TZ = tsLiteral("TZ");
+@@ -573,33 +572,12 @@ public final class TimeModuleBuiltins extends PythonBuiltins {
+ 
+         @TruffleBoundary
+         private static void doSleep(Node node, long seconds, long deadline) {
+-            long secs = seconds;
+-            do {
+-                TruffleSafepoint.setBlockedThreadInterruptible(node, (s) -> {
+-                    Thread.sleep(s * 1000);
+-                }, secs);
+-                secs = deadline - (long) timeSeconds();
+-            } while (secs >= 0);
++            throw LwNoWait.forbidden(); // Leek Wars : attendre est interdit
+         }
+ 
+         @TruffleBoundary
+         private static void doSleep(Node node, double seconds, double deadline) {
+-            double secs = seconds;
+-            do {
+-                TruffleSafepoint.setBlockedThreadInterruptible(node, (s) -> {
+-                    double milliseconds = s * 1000;
+-                    long millis = Math.round(Math.floor(milliseconds));
+-                    int nanos = ((Long) Math.round((milliseconds - millis) * 1000)).intValue();
+-                    nanos = (millis == 0 && nanos == 0) ? DELAY_NANOS : nanos;
+-                    try {
+-                        Thread.sleep(millis, nanos);
+-                    } catch (InterruptedException ignored) {
+-                        // Truffle would otherwise execute the action again after interrupt
+-                        Thread.currentThread().interrupt();
+-                    }
+-                }, secs);
+-                secs = deadline - timeSeconds();
+-            } while (secs >= 0);
++            throw LwNoWait.forbidden(); // Leek Wars : attendre est interdit
+         }
+ 
+         @TruffleBoundary
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/multiprocessing/PGraalPySemLock.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/multiprocessing/PGraalPySemLock.java
+index f17cebb..39234e8 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/multiprocessing/PGraalPySemLock.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/multiprocessing/PGraalPySemLock.java
+@@ -41,13 +41,10 @@
+ package com.oracle.graal.python.builtins.modules.multiprocessing;
+ 
+ import java.util.concurrent.Semaphore;
+-import java.util.concurrent.TimeUnit;
+ 
+ import com.oracle.graal.python.builtins.objects.thread.AbstractPythonLock;
+ import com.oracle.graal.python.builtins.objects.thread.PThread;
+ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+-import com.oracle.truffle.api.TruffleSafepoint;
+-import com.oracle.truffle.api.nodes.Node;
+ import com.oracle.truffle.api.object.Shape;
+ import com.oracle.truffle.api.strings.TruffleString;
+ 
+@@ -80,33 +77,6 @@ public final class PGraalPySemLock extends AbstractPythonLock {
+         return ret;
+     }
+ 
+-    @Override
+-    @TruffleBoundary
+-    protected boolean acquireBlocking(Node node) {
+-        boolean[] b = new boolean[1];
+-        TruffleSafepoint.setBlockedThreadInterruptible(node, (s) -> {
+-            s.acquire();
+-            b[0] = true;
+-        }, semaphore);
+-        if (b[0]) {
+-            lastThreadID = PThread.getThreadId(Thread.currentThread());
+-            count++;
+-        }
+-        return b[0];
+-    }
+-
+-    @Override
+-    @TruffleBoundary
+-    protected boolean acquireTimeout(Node node, long timeout) {
+-        boolean[] b = new boolean[1];
+-        TruffleSafepoint.setBlockedThreadInterruptible(node, (s) -> b[0] = s.tryAcquire(timeout, TimeUnit.MILLISECONDS), semaphore);
+-        if (b[0]) {
+-            lastThreadID = PThread.getThreadId(Thread.currentThread());
+-            count++;
+-        }
+-        return b[0];
+-    }
+-
+     @Override
+     @TruffleBoundary
+     public void release() {
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/code/PCode.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/code/PCode.java
 index 084f871..ee6ef2c 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/code/PCode.java
@@ -292,6 +408,85 @@ index ca134fc..25e24be 100644
      }
  
      private static Object ensurePBCT(Object clazz) {
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/queue/SimpleQueueBuiltins.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/queue/SimpleQueueBuiltins.java
+index bcc487c..84b9f49 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/queue/SimpleQueueBuiltins.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/queue/SimpleQueueBuiltins.java
+@@ -48,6 +48,7 @@ import static com.oracle.graal.python.nodes.SpecialMethodNames.J___CLASS_GETITEM
+ 
+ import java.util.List;
+ 
++import com.oracle.graal.python.builtins.objects.thread.LwNoWait;
+ import com.oracle.graal.python.PythonLanguage;
+ import com.oracle.graal.python.annotations.ArgumentClinic;
+ import com.oracle.graal.python.annotations.ArgumentClinic.ClinicConversion;
+@@ -73,11 +74,9 @@ import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
+ import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
+ import com.oracle.graal.python.nodes.util.CannotCastException;
+ import com.oracle.graal.python.nodes.util.CastToJavaDoubleNode;
+-import com.oracle.graal.python.runtime.GilNode;
+ import com.oracle.graal.python.runtime.object.PFactory;
+ import com.oracle.graal.python.util.OverflowException;
+ import com.oracle.graal.python.util.PythonUtils;
+-import com.oracle.truffle.api.CompilerDirectives;
+ import com.oracle.truffle.api.dsl.Bind;
+ import com.oracle.truffle.api.dsl.Cached;
+ import com.oracle.truffle.api.dsl.Cached.Exclusive;
+@@ -184,7 +183,6 @@ public final class SimpleQueueBuiltins extends PythonBuiltins {
+         @Specialization(guards = "!withTimeout(block, timeout)")
+         static Object doNoTimeout(PSimpleQueue self, boolean block, @SuppressWarnings("unused") Object timeout,
+                         @Bind Node inliningTarget,
+-                        @Shared @Cached GilNode gil,
+                         @Exclusive @Cached PRaiseNode raiseNode) {
+             // CPython first tries a non-blocking get without releasing the GIL
+             Object result = self.poll();
+@@ -192,16 +190,7 @@ public final class SimpleQueueBuiltins extends PythonBuiltins {
+                 return result;
+             }
+             if (block) {
+-                try {
+-                    gil.release(true);
+-                    return self.get();
+-                } catch (InterruptedException e) {
+-                    CompilerDirectives.transferToInterpreter();
+-                    Thread.currentThread().interrupt();
+-                    return PNone.NONE;
+-                } finally {
+-                    gil.acquire();
+-                }
++                throw LwNoWait.forbidden(); // Leek Wars : file vide, personne ne la remplira
+             }
+             throw raiseNode.raise(inliningTarget, Empty);
+         }
+@@ -211,7 +200,6 @@ public final class SimpleQueueBuiltins extends PythonBuiltins {
+                         @Bind Node inliningTarget,
+                         @Cached PyLongAsLongAndOverflowNode asLongNode,
+                         @Cached CastToJavaDoubleNode castToDouble,
+-                        @Shared @Cached GilNode gil,
+                         @Exclusive @Cached PRaiseNode raiseNode) {
+             assert block;
+ 
+@@ -236,18 +224,8 @@ public final class SimpleQueueBuiltins extends PythonBuiltins {
+             if (result != null) {
+                 return result;
+             }
+-
+-            try {
+-                gil.release(true);
+-                result = self.get(ltimeout);
+-                if (result != null) {
+-                    return result;
+-                }
+-            } catch (InterruptedException e) {
+-                CompilerDirectives.transferToInterpreter();
+-                Thread.currentThread().interrupt();
+-            } finally {
+-                gil.acquire();
++            if (ltimeout > 0) {
++                throw LwNoWait.forbidden(); // Leek Wars : file vide, personne ne la remplira
+             }
+             throw raiseNode.raise(inliningTarget, Empty);
+         }
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/random/RandomBuiltins.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/random/RandomBuiltins.java
 index 33b12a6..4c5f894 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/random/RandomBuiltins.java
@@ -312,6 +507,177 @@ index 33b12a6..4c5f894 100644
              int ints = ((k + 31) / 32);
              ByteBuffer bb = ByteBuffer.wrap(new byte[4 * ints]).order(ByteOrder.BIG_ENDIAN);
              for (int i = ints - 1; i > 0; --i) {
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/AbstractPythonLock.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/AbstractPythonLock.java
+index 9dc7936..fc4a4a1 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/AbstractPythonLock.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/AbstractPythonLock.java
+@@ -65,9 +65,21 @@ public abstract class AbstractPythonLock extends PythonBuiltinObject {
+ 
+     protected abstract boolean acquireNonBlocking();
+ 
+-    protected abstract boolean acquireBlocking(Node node);
++    /**
++     * Leek Wars : jamais d'attente (cf {@link LwNoWait}). Un verrou libre est pris, sinon erreur : avec un
++     * seul fil, personne ne le relacherait pendant l'attente.
++     */
++    public final boolean acquireBlocking(@SuppressWarnings("unused") Node node) {
++        if (acquireNonBlocking()) {
++            return true;
++        }
++        throw LwNoWait.forbidden();
++    }
+ 
+-    protected abstract boolean acquireTimeout(Node node, long timeout);
++    /** Meme regle ; un delai nul reste un essai sans attente. */
++    public final boolean acquireTimeout(Node node, long timeout) {
++        return timeout <= 0 ? acquireNonBlocking() : acquireBlocking(node);
++    }
+ 
+     protected boolean acquireTimeout(Node node, double timeout) {
+         return acquireTimeout(node, getTimeoutInMillis(timeout));
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/LwNoWait.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/LwNoWait.java
+new file mode 100644
+index 0000000..8bd3101
+--- /dev/null
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/LwNoWait.java
+@@ -0,0 +1,52 @@
++/*
++ * Leek Wars : une IA n'attend jamais. Son code n'a qu'un fil (creation de threads refusee) : un verrou
++ * pris ou une file vide ne seront liberes par personne, l'attente ne ferait qu'immobiliser le worker.
++ * Les primitives qui attendraient levent donc cette erreur, reconnue par le generateur a son message.
++ * Leur chemin sans attente (verrou libre, file non vide) est inchange.
++ */
++package com.oracle.graal.python.builtins.objects.thread;
++
++import static com.oracle.graal.python.runtime.exception.PythonErrorType.RuntimeError;
++import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
++
++import java.io.IOException;
++import java.nio.channels.SelectableChannel;
++
++import com.oracle.graal.python.nodes.PRaiseNode;
++import com.oracle.graal.python.runtime.exception.PException;
++import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
++import com.oracle.truffle.api.strings.TruffleString;
++
++public final class LwNoWait {
++
++    /** Message reconnu par le generateur (PolyglotEntityAI), a garder identique des deux cotes. */
++    private static final TruffleString FORBIDDEN = tsLiteral("waiting is not allowed in Leek Wars");
++
++    private LwNoWait() {
++    }
++
++    @TruffleBoundary
++    public static PException forbidden() {
++        throw PRaiseNode.raiseStatic(null, RuntimeError, FORBIDDEN);
++    }
++
++    public interface ChannelOperation {
++        int run() throws IOException;
++    }
++
++    /**
++     * Operation sur un canal bloquant (pipe) faite sans attendre : 0 octet si elle aurait attendu. Le
++     * mode du canal est retabli ensuite, os.get_blocking() reste juste.
++     */
++    @TruffleBoundary
++    public static int withoutWaiting(SelectableChannel channel, ChannelOperation operation) throws IOException {
++        synchronized (channel.blockingLock()) {
++            channel.configureBlocking(false);
++            try {
++                return operation.run();
++            } finally {
++                channel.configureBlocking(true);
++            }
++        }
++    }
++}
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/PLock.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/PLock.java
+index 171fff5..4f1fc3a 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/PLock.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/PLock.java
+@@ -41,11 +41,8 @@
+ package com.oracle.graal.python.builtins.objects.thread;
+ 
+ import java.util.concurrent.Semaphore;
+-import java.util.concurrent.TimeUnit;
+ 
+ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+-import com.oracle.truffle.api.TruffleSafepoint;
+-import com.oracle.truffle.api.nodes.Node;
+ import com.oracle.truffle.api.object.Shape;
+ 
+ public final class PLock extends AbstractPythonLock {
+@@ -63,25 +60,6 @@ public final class PLock extends AbstractPythonLock {
+         return semaphore.tryAcquire();
+     }
+ 
+-    @Override
+-    @TruffleBoundary
+-    public boolean acquireBlocking(Node node) {
+-        boolean[] b = new boolean[1];
+-        TruffleSafepoint.setBlockedThreadInterruptible(node, (s) -> {
+-            s.acquire();
+-            b[0] = true;
+-        }, semaphore);
+-        return b[0];
+-    }
+-
+-    @Override
+-    @TruffleBoundary
+-    public boolean acquireTimeout(Node node, long timeout) {
+-        boolean[] b = new boolean[1];
+-        TruffleSafepoint.setBlockedThreadInterruptible(node, (s) -> b[0] = s.tryAcquire(timeout, TimeUnit.MILLISECONDS), semaphore);
+-        return b[0];
+-    }
+-
+     @Override
+     @TruffleBoundary
+     public void release() {
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/PRLock.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/PRLock.java
+index 3dc9b97..66f806c 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/PRLock.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/thread/PRLock.java
+@@ -40,12 +40,9 @@
+  */
+ package com.oracle.graal.python.builtins.objects.thread;
+ 
+-import java.util.concurrent.TimeUnit;
+ import java.util.concurrent.locks.ReentrantLock;
+ 
+ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+-import com.oracle.truffle.api.TruffleSafepoint;
+-import com.oracle.truffle.api.nodes.Node;
+ import com.oracle.truffle.api.object.Shape;
+ 
+ public final class PRLock extends AbstractPythonLock {
+@@ -101,25 +98,6 @@ public final class PRLock extends AbstractPythonLock {
+         return lock.tryLock();
+     }
+ 
+-    @Override
+-    @TruffleBoundary
+-    protected boolean acquireBlocking(Node node) {
+-        boolean[] b = new boolean[1];
+-        TruffleSafepoint.setBlockedThreadInterruptible(node, (l) -> {
+-            l.lockInterruptibly();
+-            b[0] = true;
+-        }, lock);
+-        return b[0];
+-    }
+-
+-    @Override
+-    @TruffleBoundary
+-    protected boolean acquireTimeout(Node node, long timeout) {
+-        boolean[] b = new boolean[1];
+-        TruffleSafepoint.setBlockedThreadInterruptible(node, (l) -> b[0] = l.tryLock(timeout, TimeUnit.MILLISECONDS), lock);
+-        return b[0];
+-    }
+-
+     @Override
+     @TruffleBoundary
+     public void release() {
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java
 index 00eafcd..c0ae9fc 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java
@@ -502,3 +868,96 @@ index f9fc7cb..a11cda0 100644
      public void setMetadata(BytecodeDSLCodeUnit co, ParserCallbacksImpl parserErrorCallback, boolean internal) {
          CompilerDirectives.transferToInterpreterAndInvalidate();
          this.co = co;
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/EmulatedPosixSupport.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/EmulatedPosixSupport.java
+index 1e1b092..1c3bec4 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/EmulatedPosixSupport.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/EmulatedPosixSupport.java
+@@ -220,6 +220,7 @@ import org.graalvm.nativeimage.ImageInfo;
+ import org.graalvm.nativeimage.ProcessProperties;
+ import org.graalvm.polyglot.io.ProcessHandler.Redirect;
+ 
++import com.oracle.graal.python.builtins.objects.thread.LwNoWait;
+ import com.oracle.graal.python.PythonLanguage;
+ import com.oracle.graal.python.annotations.PythonOS;
+ import com.oracle.graal.python.builtins.modules.PosixModuleBuiltins;
+@@ -248,6 +249,7 @@ import com.oracle.graal.python.runtime.PosixSupportLibrary.UniversalSockAddr;
+ import com.oracle.graal.python.runtime.PosixSupportLibrary.UniversalSockAddrLibrary;
+ import com.oracle.graal.python.runtime.PosixSupportLibrary.UnixSockAddr;
+ import com.oracle.graal.python.runtime.PosixSupportLibrary.UnsupportedPosixFeatureException;
++import com.oracle.graal.python.runtime.exception.PException;
+ import com.oracle.graal.python.runtime.exception.PythonExitException;
+ import com.oracle.graal.python.util.FileDeleteShutdownHook;
+ import com.oracle.graal.python.util.IPAddressUtil;
+@@ -505,6 +507,8 @@ public final class EmulatedPosixSupport extends PosixResources {
+         }
+         try {
+             return doWriteOp(data.getByteBuffer(), (WritableByteChannel) channel);
++        } catch (PException e) {
++            throw e; // LwNoWait
+         } catch (Exception e) {
+             errorBranch.enter(inliningTarget);
+             throw posixException(OSErrorEnum.fromException(e, eqNode));
+@@ -513,6 +517,14 @@ public final class EmulatedPosixSupport extends PosixResources {
+ 
+     @TruffleBoundary(allowInlining = true)
+     private static int doWriteOp(ByteBuffer data, WritableByteChannel channel) throws IOException {
++        if (channel instanceof SelectableChannel selectable && selectable.isBlocking()) {
++            // Leek Wars : un pipe plein ne sera vide par personne (un seul fil), on ne l'attend pas.
++            int written = LwNoWait.withoutWaiting(selectable, () -> channel.write(data));
++            if (written == 0 && data.hasRemaining()) {
++                throw LwNoWait.forbidden();
++            }
++            return written;
++        }
+         return channel.write(data);
+     }
+ 
+@@ -529,6 +541,8 @@ public final class EmulatedPosixSupport extends PosixResources {
+         }
+         try {
+             return readBytesFromChannel((ReadableByteChannel) channel, length);
++        } catch (PException e) {
++            throw e; // LwNoWait
+         } catch (Exception e) {
+             errorBranch.enter(inliningTarget);
+             throw posixException(OSErrorEnum.fromException(e, eqNode));
+@@ -548,7 +562,16 @@ public final class EmulatedPosixSupport extends PosixResources {
+         }
+         size = Math.min(size, MAX_READ);
+         ByteBuffer dst = ByteBuffer.allocate((int) size);
+-        int readSize = channel.read(dst);
++        int readSize;
++        if (channel instanceof SelectableChannel selectable && selectable.isBlocking()) {
++            // Leek Wars : un pipe vide ne sera rempli par personne (un seul fil), on ne l'attend pas.
++            readSize = LwNoWait.withoutWaiting(selectable, () -> channel.read(dst));
++            if (readSize == 0 && size > 0) {
++                throw LwNoWait.forbidden();
++            }
++        } else {
++            readSize = channel.read(dst);
++        }
+         if (readSize <= 0) {
+             return new Buffer(PythonUtils.EMPTY_BYTE_ARRAY, 0);
+         } else {
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/PythonContext.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/PythonContext.java
+index 783e569..8e363df 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/PythonContext.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/PythonContext.java
+@@ -100,6 +100,7 @@ import java.util.logging.Level;
+ 
+ import org.graalvm.options.OptionKey;
+ 
++import com.oracle.graal.python.builtins.objects.thread.LwNoWait;
+ import com.oracle.graal.python.PythonLanguage;
+ import com.oracle.graal.python.annotations.PythonOS;
+ import com.oracle.graal.python.builtins.Python3Core;
+@@ -1118,6 +1119,9 @@ public final class PythonContext extends Python3Core {
+                 noFDHandler.run();
+                 throw CompilerDirectives.shouldNotReachHere();
+             }
++            if (q.isEmpty()) {
++                throw LwNoWait.forbidden(); // pipe vide, ecrivain ouvert : personne ne l'ecrira
++            }
+             Object[] o = new Object[]{PNone.NONE};
+             TruffleSafepoint.setBlockedThreadInterruptible(node, (lbq) -> {
+                 o[0] = take(lbq);

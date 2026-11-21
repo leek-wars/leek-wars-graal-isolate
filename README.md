@@ -80,6 +80,12 @@ exécuter des binaires depuis l'arbre de build :
   Il rétroporte aussi le correctif amont `ad0345f` (oracle/graalpython#1083 : fuite des nœuds
   racine sous engine partagé, jusqu'au `MemoryError` de tout l'isolate). À retirer dès qu'une
   release le contient.
+  Aucune attente pour une IA (`LwNoWait`) : son code n'a qu'un fil, un verrou pris ou une file
+  vide ne seraient libérés par personne. `time.sleep`, les verrous (`AbstractPythonLock` :
+  `Lock`, `RLock`, `Event`, `Condition`, sémaphores), `SimpleQueue.get` et les lectures ou
+  écritures d'un pipe qui attendraient lèvent `RuntimeError: waiting is not allowed in Leek Wars`,
+  que le générateur affiche au joueur sous un code d'erreur dédié. Leur chemin sans attente
+  est inchangé.
 - `src/com.leekwars.truffle.instrument/` — l'instrument (copié dans l'arbre graaljs au build).
 - `scripts/Gate2.java` — harnais de validation (instrument listé, binding lisible,
   déterminisme, coûts, mémoire retenue lue par l'hôte et depuis un appel guest → hôte).

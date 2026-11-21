@@ -240,6 +240,20 @@ public class Gate2 {
             if (!interruptible(engine, "python", "max(iter(range(10 ** 10)))")) failures++;
             if (!interruptible(engine, "python", "sum(range(10 ** 12))")) failures++;
             if (!refusedFast(engine, "python", "exec('x = 0x' + 'f' * 1000000)", "integer literal too large")) failures++;
+            // Attentes interdites (LwNoWait) : refusees tout de suite, chemins sans attente inchanges.
+            String wait = "waiting is not allowed in Leek Wars";
+            if (!refusedFast(engine, "python", "import time; time.sleep(5)", wait)) failures++;
+            if (!refusedFast(engine, "python", "import threading; threading.Event().wait(5)", wait)) failures++;
+            if (!refusedFast(engine, "python", "import threading; l = threading.Lock(); l.acquire(); l.acquire()", wait)) failures++;
+            if (!refusedFast(engine, "python", "import _queue; _queue.SimpleQueue().get(True, 5)", wait)) failures++;
+            if (!refusedFast(engine, "python", "import _queue; _queue.SimpleQueue().get()", wait)) failures++;
+            if (!refusedFast(engine, "python", "import os; r, w = os.pipe(); os.read(r, 1)", wait)) failures++;
+            if (!refusedFast(engine, "python", "import os; r, w = os.pipe(); [os.write(w, b'x' * 100000) for _ in range(20)]", wait)) failures++;
+            if (!returnsFast(engine, "python", "(lambda p: (__import__('os').write(p[1], b'xy'), len(__import__('os').read(p[0], 5)))[1])(__import__('os').pipe())", "2")) failures++;
+            if (!returnsFast(engine, "python", "(lambda l: (l.acquire(), l.acquire(True, 0))[1])(__import__('threading').Lock())", "false")) failures++;
+            if (!returnsFast(engine, "python", "(lambda l: [l.acquire() for _ in range(3)][-1])(__import__('threading').RLock())", "true")) failures++;
+            if (!returnsFast(engine, "python", "(lambda q: (q.put(7), q.get(True, 5))[1])(__import__('_queue').SimpleQueue())", "7")) failures++;
+            if (!returnsFast(engine, "python", "(lambda e: (e.set(), e.wait(5))[1])(__import__('threading').Event())", "true")) failures++;
         }
 
         System.out.println("=== fin Gate 2 ===");
