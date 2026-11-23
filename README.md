@@ -86,6 +86,14 @@ exécuter des binaires depuis l'arbre de build :
   écritures d'un pipe qui attendraient lèvent `RuntimeError: waiting is not allowed in Leek Wars`,
   que le générateur affiche au joueur sous un code d'erreur dédié. Leur chemin sans attente
   est inchangé.
+  Opérations natives (`PythonContext.lwCharge`) : les éléments que les builtins parcourent en Java
+  échappent au compteur de statements (`sum(map(float.__mul__, a, b))`, ensembles, `dict.update`).
+  Chaque élément rendu par un itérateur natif (`CallSlotTpIterNextNode` : map, zip, enumerate, dict,
+  set...), par les boucles rapides de `sum` ou par les opérations en masse sur les dict et ensembles
+  (`HashingStorageForEach`, `dict.update`, copie) compte 1. La boucle `for` du bytecode, déjà comptée
+  par l'instrument, rend le sien. `__graalpython__.lw_native_ops(reset, plafond)` lit et remet à zéro
+  le compte ; au-delà du plafond, chaque opération native lève `RuntimeError: operation limit reached
+  in Leek Wars`. Le générateur ajoute ce compte à `System.operations` (Gate2 [7] le vérifie).
 - `src/com.leekwars.truffle.instrument/` — l'instrument (copié dans l'arbre graaljs au build).
 - `scripts/Gate2.java` — harnais de validation (instrument listé, binding lisible,
   déterminisme, coûts, mémoire retenue lue par l'hôte et depuis un appel guest → hôte).

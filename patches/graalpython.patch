@@ -39,7 +39,7 @@ index 75798b7..48d1e4d 100644
          if (ch >= '0' && ch <= '9') {
              return ch - '0';
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/BuiltinFunctions.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/BuiltinFunctions.java
-index 6c287f8..f45046a 100644
+index 6c287f8..90d15dd 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/BuiltinFunctions.java
 +++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/BuiltinFunctions.java
 @@ -278,6 +278,7 @@ import com.oracle.graal.python.util.CharsetMapping;
@@ -50,46 +50,86 @@ index 6c287f8..f45046a 100644
  import com.oracle.truffle.api.CallTarget;
  import com.oracle.truffle.api.CompilerAsserts;
  import com.oracle.truffle.api.CompilerDirectives;
-@@ -1899,6 +1900,7 @@ public final class BuiltinFunctions extends PythonBuiltins {
+@@ -1899,6 +1900,8 @@ public final class BuiltinFunctions extends PythonBuiltins {
                              @Shared @Cached InlinedConditionProfile resultFitsInInt) {
                  long longResult = start;
                  while (loopProfilePrimitive.profile(inliningTarget, iterator.hasNext())) {
 +                    TruffleSafepoint.poll(inliningTarget); // Leek Wars : sum(range(10**12)) ne passe pas par PyIterNextNode
++                    PythonContext.get(inliningTarget).lwCharge(1); // Leek Wars : idem pour le compte, cf PyIterNextNode
                      long next = iterator.next();
                      try {
                          longResult = PythonUtils.addExact(longResult, next);
-@@ -1906,6 +1908,7 @@ public final class BuiltinFunctions extends PythonBuiltins {
+@@ -1906,6 +1909,8 @@ public final class BuiltinFunctions extends PythonBuiltins {
                          overflowProfile.enter(inliningTarget);
                          Object objectResult = addNode.execute(frame, longResult, next);
                          while (loopProfileGeneric.profile(inliningTarget, iterator.hasNext())) {
 +                            TruffleSafepoint.poll(inliningTarget); // Leek Wars : sum(range(10**12)) ne passe pas par PyIterNextNode
++                            PythonContext.get(inliningTarget).lwCharge(1); // Leek Wars : idem pour le compte, cf PyIterNextNode
                              objectResult = addNode.execute(frame, objectResult, iterator.next());
                          }
                          return objectResult;
-@@ -1923,6 +1926,7 @@ public final class BuiltinFunctions extends PythonBuiltins {
+@@ -1923,6 +1928,8 @@ public final class BuiltinFunctions extends PythonBuiltins {
                              @Shared @Cached InlinedConditionProfile resultFitsInInt) {
                  long longResult = start;
                  while (loopProfilePrimitive.profile(inliningTarget, iterator.hasNext())) {
 +                    TruffleSafepoint.poll(inliningTarget); // Leek Wars : sum(range(10**12)) ne passe pas par PyIterNextNode
++                    PythonContext.get(inliningTarget).lwCharge(1); // Leek Wars : idem pour le compte, cf PyIterNextNode
                      long next = iterator.next();
                      try {
                          longResult = PythonUtils.addExact(longResult, next);
-@@ -1930,6 +1934,7 @@ public final class BuiltinFunctions extends PythonBuiltins {
+@@ -1930,6 +1937,8 @@ public final class BuiltinFunctions extends PythonBuiltins {
                          overflowProfile.enter(inliningTarget);
                          Object objectResult = addNode.execute(frame, longResult, next);
                          while (loopProfileGeneric.profile(inliningTarget, iterator.hasNext())) {
 +                            TruffleSafepoint.poll(inliningTarget); // Leek Wars : sum(range(10**12)) ne passe pas par PyIterNextNode
++                            PythonContext.get(inliningTarget).lwCharge(1); // Leek Wars : idem pour le compte, cf PyIterNextNode
                              objectResult = addNode.execute(frame, objectResult, iterator.next());
                          }
                          return objectResult;
-@@ -1950,6 +1955,7 @@ public final class BuiltinFunctions extends PythonBuiltins {
+@@ -1950,6 +1959,8 @@ public final class BuiltinFunctions extends PythonBuiltins {
                  }
                  double result = startIsDouble.profile(inliningTarget, start instanceof Double) ? (double) start : (int) start;
                  while (loopProfilePrimitive.profile(inliningTarget, iterator.hasNext())) {
 +                    TruffleSafepoint.poll(inliningTarget); // Leek Wars : sum(range(10**12)) ne passe pas par PyIterNextNode
++                    PythonContext.get(inliningTarget).lwCharge(1); // Leek Wars : idem pour le compte, cf PyIterNextNode
                      result += iterator.next();
                  }
                  return result;
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/GraalPythonModuleBuiltins.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/GraalPythonModuleBuiltins.java
+index 81bb52d..5cba201 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/GraalPythonModuleBuiltins.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/GraalPythonModuleBuiltins.java
+@@ -985,6 +985,30 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
+         }
+     }
+ 
++    // Leek Wars : operations natives du contexte (cf PythonContext.lwNativeOps). lw_native_ops() les
++    // lit ; lw_native_ops(0, plafond) les remet a zero et fixe le plafond du tour. Le prelude du
++    // generateur la capture puis la retire du module.
++    @Builtin(name = "lw_native_ops", minNumOfPositionalArgs = 0, maxNumOfPositionalArgs = 2)
++    @GenerateNodeFactory
++    public abstract static class LwNativeOps extends PythonBinaryBuiltinNode {
++        @Specialization
++        static long doIt(Object reset, Object limit,
++                        @Bind PythonContext context) {
++            long count = context.lwNativeOps;
++            if (reset instanceof Long l) {
++                context.lwNativeOps = l;
++            } else if (reset instanceof Integer i) {
++                context.lwNativeOps = i;
++            }
++            if (limit instanceof Long l) {
++                context.lwNativeOpsLimit = l;
++            } else if (limit instanceof Integer i) {
++                context.lwNativeOpsLimit = i;
++            }
++            return count;
++        }
++    }
++
+     // Internal builtin used for testing: changes strategy of newly allocated set or map
+     @Builtin(name = "set_storage_strategy", minNumOfPositionalArgs = 2)
+     @GenerateNodeFactory
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/MathModuleBuiltins.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/MathModuleBuiltins.java
 index b56a70e..7ec3d08 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/MathModuleBuiltins.java
@@ -280,6 +320,58 @@ index 084f871..ee6ef2c 100644
          return PFactory.createCode(language, rN, rN.getSignature(), codeUnit, getFilename());
      }
  
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/common/HashingStorageNodes.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/common/HashingStorageNodes.java
+index 564d8a7..9c7692b 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/common/HashingStorageNodes.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/common/HashingStorageNodes.java
+@@ -74,6 +74,7 @@ import com.oracle.graal.python.nodes.attributes.ReadAttributeFromPythonObjectNod
+ import com.oracle.graal.python.nodes.interop.PForeignToPTypeNode;
+ import com.oracle.graal.python.nodes.object.IsForeignObjectNode;
+ import com.oracle.graal.python.nodes.util.CastBuiltinStringToTruffleStringNode;
++import com.oracle.graal.python.runtime.PythonContext;
+ import com.oracle.truffle.api.CompilerAsserts;
+ import com.oracle.truffle.api.CompilerDirectives;
+ import com.oracle.truffle.api.CompilerDirectives.ValueType;
+@@ -740,7 +741,9 @@ public class HashingStorageNodes {
+         public abstract HashingStorage execute(Node inliningTarget, HashingStorage source);
+ 
+         @Specialization
+-        static HashingStorage economic(EconomicMapStorage map) {
++        static HashingStorage economic(Node inliningTarget, EconomicMapStorage map) {
++            // Leek Wars : dict.copy(), set.copy()... un element par entree, cf HashingStorageForEach
++            PythonContext.get(inliningTarget).lwCharge(map.length());
+             return map.copy();
+         }
+ 
+@@ -1345,6 +1348,8 @@ public class HashingStorageNodes {
+                         loopCount++;
+                     }
+                     accumulator = callback.execute(frame, callbackInliningTarget, storage, aIter, accumulator);
++                    // Leek Wars : ensembles et dict en masse (&, |, -, ^, update...), hors du compteur de statements
++                    PythonContext.get(inliningTarget).lwCharge(1);
+                 }
+             } finally {
+                 if (loopCount != 0) {
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/dict/DictNodes.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/dict/DictNodes.java
+index be19c58..720e858 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/dict/DictNodes.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/dict/DictNodes.java
+@@ -62,6 +62,7 @@ import com.oracle.graal.python.nodes.PNodeWithContext;
+ import com.oracle.graal.python.nodes.PRaiseNode;
+ import com.oracle.graal.python.nodes.object.BuiltinClassProfiles;
+ import com.oracle.graal.python.nodes.object.IsForeignObjectNode;
++import com.oracle.graal.python.runtime.PythonContext;
+ import com.oracle.truffle.api.CompilerDirectives;
+ import com.oracle.truffle.api.dsl.Bind;
+ import com.oracle.truffle.api.dsl.Cached;
+@@ -174,6 +175,7 @@ public abstract class DictNodes {
+             var newStorage = selfStorage;
+             while (iterNext.execute(inliningTarget, otherStorage, itOther)) {
+                 newStorage = transferItem.execute(frame, inliningTarget, otherStorage, itOther, newStorage);
++                PythonContext.get(inliningTarget).lwCharge(1); // Leek Wars : dict.update, cf HashingStorageForEach
+                 if (initialSize != otherLenNode.execute(inliningTarget, otherStorage)) {
+                     throw raiseNode.raise(inliningTarget, RuntimeError, ErrorMessages.MUTATED_DURING_UPDATE, "dict");
+                 }
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/ints/IntBuiltins.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/ints/IntBuiltins.java
 index 477dfe3..39fe5f3 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/ints/IntBuiltins.java
@@ -678,6 +770,38 @@ index 3dc9b97..66f806c 100644
      @Override
      @TruffleBoundary
      public void release() {
+diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/type/slots/TpSlotIterNext.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/type/slots/TpSlotIterNext.java
+index ea8d304..f8e4f58 100644
+--- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/type/slots/TpSlotIterNext.java
++++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/type/slots/TpSlotIterNext.java
+@@ -182,10 +182,14 @@ public final class TpSlotIterNext {
+         }
+ 
+         @Specialization(guards = "cachedSlot == slot", limit = "3")
+-        static Object callCachedBuiltin(VirtualFrame frame, @SuppressWarnings("unused") TpSlotIterNextBuiltin<?> slot, Object self,
++        static Object callCachedBuiltin(VirtualFrame frame, Node inliningTarget, @SuppressWarnings("unused") TpSlotIterNextBuiltin<?> slot, Object self,
+                         @SuppressWarnings("unused") @Cached("slot") TpSlotIterNextBuiltin<?> cachedSlot,
+                         @Cached("cachedSlot.createSlotNode()") PythonUnaryBuiltinNode slotNode) {
+-            return slotNode.execute(frame, self);
++            Object next = slotNode.execute(frame, self);
++            // Leek Wars : un element rendu par un iterateur natif (map, zip, enumerate, dict, set...), hors du
++            // compteur de statements. La boucle for du bytecode le rend, cf PBytecodeDSLRootNode.ForIterate.
++            PythonContext.get(inliningTarget).lwCharge(1);
++            return next;
+         }
+ 
+         @Specialization
+@@ -230,7 +234,9 @@ public final class TpSlotIterNext {
+             Object[] arguments = PArguments.create(1);
+             PArguments.setArgument(arguments, 0, self);
+             RootCallTarget callTarget = PythonLanguage.get(inliningTarget).getBuiltinSlotCallTarget(slot.callTargetIndex);
+-            return invoke.execute(frame, inliningTarget, callTarget, arguments);
++            Object next = invoke.execute(frame, inliningTarget, callTarget, arguments);
++            PythonContext.get(inliningTarget).lwCharge(1); // Leek Wars : cf callCachedBuiltin
++            return next;
+         }
+     }
+ }
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java
 index 00eafcd..c0ae9fc 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/compiler/bytecode_dsl/RootNodeCompiler.java
@@ -819,7 +943,7 @@ index 363f4d9..464ad0c 100644
              BigInteger bi;
              if (sign == '-') {
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java
-index f9fc7cb..a11cda0 100644
+index f9fc7cb..6e587f3 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java
 +++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java
 @@ -58,7 +58,9 @@ import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
@@ -868,6 +992,22 @@ index f9fc7cb..a11cda0 100644
      public void setMetadata(BytecodeDSLCodeUnit co, ParserCallbacksImpl parserErrorCallback, boolean internal) {
          CompilerDirectives.transferToInterpreterAndInvalidate();
          this.co = co;
+@@ -1909,8 +1920,15 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
+                         @Bind BytecodeNode bytecode,
+                         @Cached PyIterNextNode next,
+                         @Cached IsBuiltinObjectProfile errorProfile) {
++            PythonContext context = PythonContext.get(inliningTarget);
++            long counted = context.lwNativeOps;
+             try {
+                 Object value = next.execute(frame, inliningTarget, object);
++                // Leek Wars : l'iteration d'une boucle for est deja comptee par l'instrument ; un iterateur
++                // natif l'a comptee en plus (TpSlotIterNext.CallSlotTpIterNextNode), on la rend.
++                if (context.lwNativeOps > counted) {
++                    context.lwNativeOps--;
++                }
+                 output.setObject(bytecode, frame, value);
+                 return true;
+             } catch (IteratorExhausted e) {
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/EmulatedPosixSupport.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/EmulatedPosixSupport.java
 index 1e1b092..1c3bec4 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/EmulatedPosixSupport.java
@@ -940,7 +1080,7 @@ index 1e1b092..1c3bec4 100644
              return new Buffer(PythonUtils.EMPTY_BYTE_ARRAY, 0);
          } else {
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/PythonContext.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/PythonContext.java
-index 783e569..8e363df 100644
+index 783e569..0884ca3 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/PythonContext.java
 +++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/PythonContext.java
 @@ -100,6 +100,7 @@ import java.util.logging.Level;
@@ -951,7 +1091,49 @@ index 783e569..8e363df 100644
  import com.oracle.graal.python.PythonLanguage;
  import com.oracle.graal.python.annotations.PythonOS;
  import com.oracle.graal.python.builtins.Python3Core;
-@@ -1118,6 +1119,9 @@ public final class PythonContext extends Python3Core {
+@@ -156,6 +157,7 @@ import com.oracle.graal.python.runtime.PythonContextFactory.GetThreadStateNodeGe
+ import com.oracle.graal.python.runtime.arrow.ArrowSupport;
+ import com.oracle.graal.python.runtime.exception.ExceptionUtils;
+ import com.oracle.graal.python.runtime.exception.PException;
++import com.oracle.graal.python.runtime.exception.PythonErrorType;
+ import com.oracle.graal.python.runtime.exception.PythonExitException;
+ import com.oracle.graal.python.runtime.exception.PythonThreadKillException;
+ import com.oracle.graal.python.runtime.locale.PythonLocale;
+@@ -745,6 +747,33 @@ public final class PythonContext extends Python3Core {
+     private static final String J_NO_CAPI = "could not determine Graal.Python's C API library path. You need to pass --python.CAPI if you want to use the C extension modules.";
+ 
+     private PythonModule mainModule;
++    /**
++     * Leek Wars : elements parcourus par les boucles Java des builtins (iterateurs consommes en Java,
++     * sum, ensembles et dict en masse), que le compteur de statements de l'instrument ne voit pas.
++     * Lu et remis a zero par {@code __graalpython__.lw_native_ops}, qui fixe aussi le plafond du tour.
++     * Un contexte n'a qu'un fil.
++     */
++    public long lwNativeOps;
++    public long lwNativeOpsLimit = Long.MAX_VALUE;
++    /** Message reconnu par le generateur (PolyglotEntityAI), a garder identique des deux cotes. */
++    private static final TruffleString LW_OPS_EXHAUSTED = tsLiteral("operation limit reached in Leek Wars");
++
++    /**
++     * Leek Wars : compte n operations natives. Au-dela du plafond, chacune leve l'erreur : attrapee par
++     * l'IA, elle revient a l'operation native suivante.
++     */
++    public void lwCharge(long n) {
++        lwNativeOps += n;
++        if (lwNativeOps > lwNativeOpsLimit) {
++            throw lwOpsExhausted();
++        }
++    }
++
++    @TruffleBoundary
++    private static PException lwOpsExhausted() {
++        throw PRaiseNode.raiseStatic(null, PythonErrorType.RuntimeError, LW_OPS_EXHAUSTED);
++    }
++
+     private final List<ShutdownHook> shutdownHooks = new ArrayList<>();
+     private final List<AtExitHook> atExitHooks = new ArrayList<>();
+     private final List<Object> auditHooks = new ArrayList<>();
+@@ -1118,6 +1147,9 @@ public final class PythonContext extends Python3Core {
                  noFDHandler.run();
                  throw CompilerDirectives.shouldNotReachHere();
              }
