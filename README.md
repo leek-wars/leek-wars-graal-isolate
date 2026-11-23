@@ -90,8 +90,12 @@ exécuter des binaires depuis l'arbre de build :
   échappent à l'instrument (`sum(map(float.__mul__, a, b))`, ensembles, `dict.update`). Chaque élément
   rendu par un itérateur natif (`CallSlotTpIterNextNode` : map, zip, enumerate, dict, set...), par les
   boucles rapides de `sum`, par les opérations en masse sur les dict et ensembles
-  (`HashingStorageForEach`, `dict.update`) ou trié (`list.sort`, `sorted`) compte 1 ; une copie
-  (`list(l)`, `d.copy()`) ne calcule rien et ne compte pas. La boucle `for` du bytecode, déjà comptée
+  (`HashingStorageForEach`, `dict.update`) ou trié (`list.sort`, `sorted`) compte 1, comme chaque
+  élément parcouru ou comparé par une recherche ou une comparaison de listes et tuples (`in`, `index`,
+  `count`, `==`, `<`), converti par `repr` ou joint par `str.join` ; une recherche dans une chaîne ou
+  des bytes (`find`, `in`, `count`) compte 1 + 1 par 10 caractères, `split` et `replace` 1 par
+  caractère, au tarif de LeekScript. Une copie (`list(l)`, `l + l`, `d.copy()`) ne calcule rien et
+  ne compte pas. La boucle `for` du bytecode, déjà comptée
   par l'instrument, rend le sien. Ces opérations s'ajoutent au compteur de l'instrument, que le
   générateur confie au contexte par `__graalpython__.lw_set_operations` (un seul compteur, une seule
   limite). `__graalpython__.time_millis` (heure réelle) est retiré.

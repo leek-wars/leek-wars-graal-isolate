@@ -76,6 +76,10 @@ public class Gate2 {
             ok &= check("natif de sum(map(abs, l))", nativePart(ctx, counter, set, "sum(map(abs, l))"), 2000L);
             ok &= check("natif de l.sort()", nativePart(ctx, counter, set, "l.sort()"), 1000L);
             ok &= check("natif d'un for sur un dict", nativePart(ctx, counter, set, "[x for x in d]"), 0L);
+            ctx.eval("python", "l2 = list(range(1000)); s = 'a' * 1000");
+            ok &= check("natif de 999 in l", nativePart(ctx, counter, set, "999 in l"), 1000L);
+            ok &= check("natif de l == l2", nativePart(ctx, counter, set, "l == l2"), 1000L);
+            ok &= check("natif de s.find('b')", nativePart(ctx, counter, set, "s.find('b')"), 101L);
             for (String code : new String[] { "sum(map(abs, l * 100))", "while True: pass", "try:\n    while True: pass\nexcept BaseException:\n    while True: pass" }) {
                 ok &= check("limite : " + code.replace("\n", " "), limitReached(ctx, counter, "python", code, 0), true);
             }
