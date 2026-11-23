@@ -58,6 +58,7 @@ public final class StatementCounter extends TruffleInstrument {
 	public static final String ID = "lw-statement-counter";
 	public static final String BINDING_NAME = "lwStatementCounter";
 	public static final String HEAP_BINDING_NAME = "lwHeapSize";
+	public static final String READER_BINDING_NAME = "lwOperations";
 
 	/**
 	 * Option d'activation : un instrument est lazy et, sous isolate, aucun lookup de service
@@ -76,10 +77,17 @@ public final class StatementCounter extends TruffleInstrument {
 	public static final String LIMIT_MESSAGE = "operation limit reached in Leek Wars";
 
 	/**
-	 * Compteur d'operations d'un contexte, publie tel quel dans ses polyglot bindings : execute() = lire,
-	 * execute(x) = remettre a zero, execute(x, limite) = mettre le compte a x (x &lt; 0 : inchange) et fixer
-	 * la limite. Au-dela de la limite, chaque operation comptee leve {@link LimitReached} : attrapee par
-	 * le guest, l'erreur revient a l'operation suivante.
+	 * Compteur d'operations d'un contexte, publie pour l'HOTE dans ses polyglot bindings ({@link #BINDING_NAME}) :
+	 * <ul>
+	 * <li>execute() : le compte (statements, expressions, natif) ;</li>
+	 * <li>execute("reset") : remet le compte a zero ;</li>
+	 * <li>execute("turn", budget, facteur, hote) : debut de tour, compte a zero ;</li>
+	 * <li>execute("host", hote) : operations faites par l'hote depuis le debut du tour ;</li>
+	 * <li>execute("exceeded") : vrai si le compte a depasse la limite (meme si le guest a attrape l'erreur).</li>
+	 * </ul>
+	 * Le total du tour est hote + compte x facteur ; au-dela du budget, chaque operation comptee leve
+	 * {@link LimitReached} : attrapee par le guest, l'erreur revient a l'operation suivante. Le guest ne
+	 * voit que {@link ReaderObject} : avec cet objet, il remettrait son compte a zero ou leverait la limite.
 	 *
 	 * <p>Un langage y ajoute les operations qu'il fait hors de ses noeuds instrumentes (boucles natives
 	 * de ses builtins) par {@link LongUnaryOperator#applyAsLong}, interface du JDK qu'il connait sans
@@ -89,6 +97,9 @@ public final class StatementCounter extends TruffleInstrument {
 	static final class CounterObject implements TruffleObject, LongUnaryOperator {
 		long count;
 		long limit = Long.MAX_VALUE;
+		long budget = Long.MAX_VALUE;
+		double factor = 1;
+		long host;
 
 		/** Ajoute n operations, rend le reste avant la limite (negatif : depassee). */
 		@Override
@@ -97,18 +108,48 @@ public final class StatementCounter extends TruffleInstrument {
 			return limit - count;
 		}
 
+		/** Total du tour, dans l'unite du budget. */
+		long total() {
+			return host + (long) (count * factor);
+		}
+
+		/** Limite du compte : ce qui reste du budget apres l'hote, en operations comptees. */
+		private void updateLimit() {
+			limit = budget == Long.MAX_VALUE ? Long.MAX_VALUE : (long) Math.floor((budget - host) / factor);
+		}
+
 		@ExportMessage boolean isExecutable() { return true; }
 		@ExportMessage @TruffleBoundary Object execute(Object[] args) throws UnsupportedMessageException {
-			if (args.length == 1) {
-				count = 0L;
-			} else if (args.length > 1) {
-				long value = InteropLibrary.getUncached().asLong(args[0]);
-				if (value >= 0) {
-					count = value;
+			if (args.length > 0) {
+				InteropLibrary interop = InteropLibrary.getUncached();
+				String command = interop.isString(args[0]) ? interop.asString(args[0]) : "reset";
+				if (command.equals("turn") && args.length == 4) {
+					count = 0L;
+					budget = interop.asLong(args[1]);
+					factor = interop.asDouble(args[2]);
+					host = interop.asLong(args[3]);
+					updateLimit();
+				} else if (command.equals("host") && args.length == 2) {
+					host = interop.asLong(args[1]);
+					updateLimit();
+				} else if (command.equals("exceeded")) {
+					return count > limit;
+				} else {
+					count = 0L;
 				}
-				limit = InteropLibrary.getUncached().asLong(args[1]);
 			}
 			return count;
+		}
+	}
+
+	/** Facade du compteur pour le GUEST ({@link #READER_BINDING_NAME}) : execute() = total du tour, en lecture seule. */
+	@ExportLibrary(InteropLibrary.class)
+	static final class ReaderObject implements TruffleObject {
+		private final CounterObject counter;
+		ReaderObject(CounterObject counter) { this.counter = counter; }
+		@ExportMessage boolean isExecutable() { return true; }
+		@ExportMessage Object execute(@SuppressWarnings("unused") Object[] args) {
+			return counter.total();
 		}
 	}
 
@@ -192,7 +233,9 @@ public final class StatementCounter extends TruffleInstrument {
 					}
 					try {
 						InteropLibrary bindings = InteropLibrary.getUncached();
-						bindings.writeMember(env.getPolyglotBindings(), BINDING_NAME, counters.get(context));
+						CounterObject counter = counters.get(context);
+						bindings.writeMember(env.getPolyglotBindings(), BINDING_NAME, counter);
+						bindings.writeMember(env.getPolyglotBindings(), READER_BINDING_NAME, new ReaderObject(counter));
 						bindings.writeMember(env.getPolyglotBindings(), HEAP_BINDING_NAME, new HeapSizeObject(env, context));
 					} finally {
 						if (entered) {

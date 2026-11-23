@@ -77,15 +77,25 @@ public class Gate2 {
             ok &= check("natif de l.sort()", nativePart(ctx, counter, set, "l.sort()"), 1000L);
             ok &= check("natif d'un for sur un dict", nativePart(ctx, counter, set, "[x for x in d]"), 0L);
             for (String code : new String[] { "sum(map(abs, l * 100))", "while True: pass", "try:\n    while True: pass\nexcept BaseException:\n    while True: pass" }) {
-                ok &= check("limite : " + code.replace("\n", " "), limitReached(ctx, counter, "python", code), true);
+                ok &= check("limite : " + code.replace("\n", " "), limitReached(ctx, counter, "python", code, 0), true);
             }
+            // Les operations de l'hote reduisent la limite : 4990 sur 5000, une petite boucle la depasse
+            ok &= check("limite apres l'hote", limitReached(ctx, counter, "python", "for i in range(100): pass", 4990), true);
+            // Le lecteur du guest rend le total (hote + compte) sans rien pouvoir changer
+            Value reader = ctx.getPolyglotBindings().getMember(StatementCounter.READER_BINDING_NAME);
+            counter.execute("turn", 1000, 1.0, 7);
+            ctx.eval("python", "x = 1");
+            long total = reader.execute().asLong();
+            reader.execute("turn", Long.MAX_VALUE, 1.0, 0);
+            reader.execute("reset");
+            ok &= check("lecteur en lecture seule", total > 7 && reader.execute().asLong() == total && counter.execute().asLong() == total - 7, true);
         }
         return ok;
     }
 
-    /** Vrai si code s'arrete sur l'erreur de l'instrument, une fois la limite posee a 5000 operations. */
-    static boolean limitReached(Context ctx, Value counter, String lang, String code) {
-        counter.execute(0, 5000);
+    /** Vrai si code s'arrete sur l'erreur de l'instrument, budget de 5000 operations dont host deja faites par l'hote. */
+    static boolean limitReached(Context ctx, Value counter, String lang, String code, long host) {
+        counter.execute("turn", 5000, 1.0, host);
         try {
             ctx.eval(lang, code);
             return false;
@@ -106,14 +116,14 @@ public class Gate2 {
 
     /** Operations comptees pendant code Python (compteur remis a zero, sans limite). */
     static long countPython(Context ctx, Value counter, String code) {
-        counter.execute(0, Long.MAX_VALUE);
+        counter.execute("turn", Long.MAX_VALUE, 1.0, 0);
         ctx.eval("python", code);
         return counter.execute().asLong();
     }
 
     static boolean check(String what, Object value, Object expected) {
         boolean ok = String.valueOf(value).equals(String.valueOf(expected));
-        System.out.println("[7 python] " + (ok ? "OK" : "KO") + ": " + what + " -> " + value + (ok ? "" : " (attendu " + expected + ")"));
+        System.out.println("[7] " + (ok ? "OK" : "KO") + ": " + what + " -> " + value + (ok ? "" : " (attendu " + expected + ")"));
         return ok;
     }
 
@@ -280,7 +290,7 @@ public class Gate2 {
             try (Context ctx = Context.newBuilder("js").engine(engine).build()) {
                 Value counter = ctx.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
                 for (String code : new String[] { "for (;;) {}", "try { for (;;) {} } catch (e) { for (;;) {} }" }) {
-                    boolean reached = limitReached(ctx, counter, "js", code);
+                    boolean reached = limitReached(ctx, counter, "js", code, 0);
                     System.out.println("[7 js] " + (reached ? "OK" : "KO") + ": limite : " + code);
                     if (!reached) failures++;
                 }
