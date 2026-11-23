@@ -352,7 +352,7 @@ index 27d5fc3..c2d42ac 100644
                      count++;
                  }
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/bytes/BytesNodes.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/bytes/BytesNodes.java
-index e5b3ec6..482cfba 100644
+index e5b3ec6..e6f2780 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/bytes/BytesNodes.java
 +++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/bytes/BytesNodes.java
 @@ -107,6 +107,7 @@ import com.oracle.graal.python.runtime.object.PFactory;
@@ -392,7 +392,7 @@ index e5b3ec6..482cfba 100644
 +        private static int lwScanned(int found, int start, int end, int len1, boolean reverse) {
 +            int stop = Math.min(end, len1);
 +            int scanned = found < 0 ? stop - start : reverse ? stop - found : found - start + 1;
-+            PythonContext.lwChargeCurrent(1 + Math.max(0, scanned) / 10);
++            PythonContext.lwChargeSearch(scanned);
 +            return found;
          }
  
@@ -440,7 +440,7 @@ index 564d8a7..79c7299 100644
              } finally {
                  if (loopCount != 0) {
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/common/SequenceStorageNodes.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/common/SequenceStorageNodes.java
-index a9c404d..4d945ce 100644
+index a9c404d..d4fda32 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/common/SequenceStorageNodes.java
 +++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/common/SequenceStorageNodes.java
 @@ -1903,7 +1903,7 @@ public abstract class SequenceStorageNodes {
@@ -556,7 +556,7 @@ index a9c404d..4d945ce 100644
          @Specialization
          int doBoolean(BoolSequenceStorage s, boolean item, int start, int end) {
 -            for (int i = start; i < getLength(s, end); i++) {
-+            for (int i = start; PythonContext.lwStep(null, i < getLength(s, end)); i++) { // Leek Wars : cf IndexOfNode
++            for (int i = start; PythonContext.lwStep(null, i < getLength(s, end)); i++) { // Leek Wars : un element compare, cf PythonContext.lwStep
                  if (s.getBoolItemNormalized(i) == item) {
                      return i;
                  }
@@ -565,7 +565,7 @@ index a9c404d..4d945ce 100644
          @Specialization
          int doInt(IntSequenceStorage s, int item, int start, int end) {
 -            for (int i = start; i < getLength(s, end); i++) {
-+            for (int i = start; PythonContext.lwStep(null, i < getLength(s, end)); i++) { // Leek Wars : cf IndexOfNode
++            for (int i = start; PythonContext.lwStep(null, i < getLength(s, end)); i++) { // Leek Wars : un element compare, cf PythonContext.lwStep
                  if (s.getIntItemNormalized(i) == item) {
                      return i;
                  }
@@ -574,7 +574,7 @@ index a9c404d..4d945ce 100644
          @Specialization
          int doByte(ByteSequenceStorage s, int item, int start, int end) {
 -            for (int i = start; i < getLength(s, end); i++) {
-+            for (int i = start; PythonContext.lwStep(null, i < getLength(s, end)); i++) { // Leek Wars : cf IndexOfNode
++            for (int i = start; PythonContext.lwStep(null, i < getLength(s, end)); i++) { // Leek Wars : un element compare, cf PythonContext.lwStep
                  if (s.getIntItemNormalized(i) == item) {
                      return i;
                  }
@@ -583,7 +583,7 @@ index a9c404d..4d945ce 100644
          @Specialization
          int doLong(LongSequenceStorage s, long item, int start, int end) {
 -            for (int i = start; i < getLength(s, end); i++) {
-+            for (int i = start; PythonContext.lwStep(null, i < getLength(s, end)); i++) { // Leek Wars : cf IndexOfNode
++            for (int i = start; PythonContext.lwStep(null, i < getLength(s, end)); i++) { // Leek Wars : un element compare, cf PythonContext.lwStep
                  if (s.getLongItemNormalized(i) == item) {
                      return i;
                  }
@@ -592,7 +592,7 @@ index a9c404d..4d945ce 100644
          @Specialization
          int doDouble(DoubleSequenceStorage s, double item, int start, int end) {
 -            for (int i = start; i < getLength(s, end); i++) {
-+            for (int i = start; PythonContext.lwStep(null, i < getLength(s, end)); i++) { // Leek Wars : cf IndexOfNode
++            for (int i = start; PythonContext.lwStep(null, i < getLength(s, end)); i++) { // Leek Wars : un element compare, cf PythonContext.lwStep
                  if (java.lang.Double.compare(s.getDoubleItemNormalized(i), item) == 0) {
                      return i;
                  }
@@ -601,12 +601,12 @@ index a9c404d..4d945ce 100644
                          @Cached GetItemScalarNode getItemNode,
                          @Cached PyObjectRichCompareBool eqNode) {
 -            for (int i = start; i < getLength(s, end); i++) {
-+            for (int i = start; PythonContext.lwStep(null, i < getLength(s, end)); i++) { // Leek Wars : cf IndexOfNode
++            for (int i = start; PythonContext.lwStep(null, i < getLength(s, end)); i++) { // Leek Wars : un element compare, cf PythonContext.lwStep
                  Object seqItem = getItemNode.execute(inliningTarget, s, i);
                  if (eqNode.execute(frame, inliningTarget, seqItem, item, RichCmpOp.Py_EQ)) {
                      return i;
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/deque/DequeBuiltins.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/deque/DequeBuiltins.java
-index 936428c..bd14701 100644
+index 936428c..47ab13f 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/deque/DequeBuiltins.java
 +++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/deque/DequeBuiltins.java
 @@ -118,6 +118,7 @@ import com.oracle.graal.python.nodes.util.CannotCastException;
@@ -617,14 +617,14 @@ index 936428c..bd14701 100644
  import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
  import com.oracle.truffle.api.dsl.Bind;
  import com.oracle.truffle.api.dsl.Cached;
-@@ -312,6 +313,7 @@ public final class DequeBuiltins extends PythonBuiltins {
+@@ -311,6 +312,7 @@ public final class DequeBuiltins extends PythonBuiltins {
+             int startState = self.getState();
              Iterator<Object> iterator = self.getIteratorBoundary();
              Object item;
++            PythonContext.lwChargeCurrent(self.getSize()); // Leek Wars : un element par element compte, comme tuple.count
              while ((item = PDeque.iteratorNextBoundary(iterator)) != null) {
-+                PythonContext.lwChargeCurrent(1); // Leek Wars : un element parcouru, cf IndexOfNode
                  if (richCompare.execute(frame, inliningTarget, item, value, RichCmpOp.Py_EQ)) {
                      n++;
-                 }
 @@ -421,7 +423,7 @@ public final class DequeBuiltins extends PythonBuiltins {
                  normStart = normStop;
              }
@@ -803,7 +803,7 @@ index ca134fc..25e24be 100644
  
      private static Object ensurePBCT(Object clazz) {
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/list/ListBuiltins.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/list/ListBuiltins.java
-index 2e45c04..2379c0b 100644
+index 2e45c04..30b4b4a 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/list/ListBuiltins.java
 +++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/list/ListBuiltins.java
 @@ -192,6 +192,7 @@ public final class ListBuiltins extends PythonBuiltins {
@@ -819,7 +819,7 @@ index 2e45c04..2379c0b 100644
              int len = listStore.length();
              loopProfile.profileCounted(inliningTarget, len);
 -            for (int i = 0; i < len; i++) {
-+            for (int i = 0; PythonContext.lwStep(inliningTarget, i < len); i++) { // Leek Wars : cf IndexOfNode
++            for (int i = 0; PythonContext.lwStep(inliningTarget, i < len); i++) { // Leek Wars : un element compare, cf PythonContext.lwStep
                  Object object = getItemNode.execute(listStore, i);
                  if (eqNode.execute(frame, inliningTarget, object, value, RichCmpOp.Py_EQ)) {
                      deleteNode.execute(frame, listStore, i);
@@ -941,18 +941,21 @@ index 33b12a6..4c5f894 100644
              ByteBuffer bb = ByteBuffer.wrap(new byte[4 * ints]).order(ByteOrder.BIG_ENDIAN);
              for (int i = ints - 1; i > 0; --i) {
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/str/StringBuiltins.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/str/StringBuiltins.java
-index 978671e..8527779 100644
+index 978671e..65d5b2d 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/str/StringBuiltins.java
 +++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/str/StringBuiltins.java
-@@ -592,6 +592,7 @@ public final class StringBuiltins extends PythonBuiltins {
+@@ -592,7 +592,9 @@ public final class StringBuiltins extends PythonBuiltins {
                          @Cached TruffleString.IndexOfStringNode indexOfStringNode) {
              TruffleString selfStr = castStr.cast(inliningTarget, self, ErrorMessages.REQUIRES_STRING_AS_LEFT_OPERAND, other);
              TruffleString otherStr = castStr.cast(inliningTarget, other, ErrorMessages.REQUIRES_STRING_AS_LEFT_OPERAND, other);
-+            StringNodes.lwChargeChars(selfStr, 10); // Leek Wars : comme contains en LeekScript
-             return indexOfStringNode.execute(selfStr, otherStr, 0, codePointLengthNode.execute(selfStr, TS_ENCODING), TS_ENCODING) >= 0;
+-            return indexOfStringNode.execute(selfStr, otherStr, 0, codePointLengthNode.execute(selfStr, TS_ENCODING), TS_ENCODING) >= 0;
++            int len = codePointLengthNode.execute(selfStr, TS_ENCODING);
++            PythonContext.lwChargeSearch(len); // Leek Wars : comme contains en LeekScript
++            return indexOfStringNode.execute(selfStr, otherStr, 0, len, TS_ENCODING) >= 0;
          }
      }
-@@ -841,6 +842,7 @@ public final class StringBuiltins extends PythonBuiltins {
+ 
+@@ -841,6 +843,7 @@ public final class StringBuiltins extends PythonBuiltins {
              if (cpStart >= cpLen) {
                  return 0;
              }
@@ -960,7 +963,7 @@ index 978671e..8527779 100644
  
              int subLen = codePointLengthNode.execute(sub, TS_ENCODING);
              int pos = cpStart;
-@@ -1188,6 +1190,7 @@ public final class StringBuiltins extends PythonBuiltins {
+@@ -1188,6 +1191,7 @@ public final class StringBuiltins extends PythonBuiltins {
                  throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.EMPTY_SEPARATOR);
              }
              int selfLen = codePointLengthNode.execute(selfStr, TS_ENCODING);
@@ -968,7 +971,7 @@ index 978671e..8527779 100644
              int indexOf = indexOfStringNode.execute(selfStr, sepStr, 0, selfLen, TS_ENCODING);
              TruffleString[] partitioned = new TruffleString[3];
              if (indexOf < 0) {
-@@ -1224,6 +1227,7 @@ public final class StringBuiltins extends PythonBuiltins {
+@@ -1224,6 +1228,7 @@ public final class StringBuiltins extends PythonBuiltins {
                  throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.EMPTY_SEPARATOR);
              }
              int selfLen = codePointLengthNode.execute(selfStr, TS_ENCODING);
@@ -976,31 +979,31 @@ index 978671e..8527779 100644
              int lastIndexOf = lastIndexOfStringNode.execute(selfStr, sepStr, selfLen, 0, TS_ENCODING);
              TruffleString[] partitioned = new TruffleString[3];
              if (lastIndexOf < 0) {
-@@ -1260,6 +1264,7 @@ public final class StringBuiltins extends PythonBuiltins {
+@@ -1260,6 +1265,7 @@ public final class StringBuiltins extends PythonBuiltins {
                          @Cached TruffleString.CodePointAtIndexUTF32Node codePointAtIndexNode,
                          @Shared("substring") @Cached TruffleString.SubstringNode substringNode,
                          @Shared("appendNode") @Cached AppendNode appendNode) {
-+            StringNodes.lwChargeChars(self, 1); // Leek Wars : comme split en LeekScript
++            StringNodes.lwChargeChars(self); // Leek Wars : comme split en LeekScript
              return splitfields(self, maxsplit, appendNode, codePointLengthNode, codePointAtIndexNode, substringNode);
          }
  
-@@ -1271,6 +1276,7 @@ public final class StringBuiltins extends PythonBuiltins {
+@@ -1271,6 +1277,7 @@ public final class StringBuiltins extends PythonBuiltins {
                          @Shared("substring") @Cached TruffleString.SubstringNode substringNode,
                          @Shared("appendNode") @Cached AppendNode appendNode,
                          @Cached PRaiseNode raiseNode) {
-+            StringNodes.lwChargeChars(self, 1); // Leek Wars : comme split en LeekScript
++            StringNodes.lwChargeChars(self); // Leek Wars : comme split en LeekScript
              if (sep.isEmpty()) {
                  throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.EMPTY_SEPARATOR);
              }
-@@ -1376,6 +1382,7 @@ public final class StringBuiltins extends PythonBuiltins {
+@@ -1376,6 +1383,7 @@ public final class StringBuiltins extends PythonBuiltins {
                          @Cached TruffleString.LastIndexOfStringNode lastIndexOfStringNode,
                          @Shared @Cached TruffleString.SubstringNode substringNode,
                          @Cached PRaiseNode raiseNode) {
-+            StringNodes.lwChargeChars(self, 1); // Leek Wars : comme split en LeekScript
++            StringNodes.lwChargeChars(self); // Leek Wars : comme split en LeekScript
              if (sep.isEmpty()) {
                  throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.EMPTY_SEPARATOR);
              }
-@@ -1418,6 +1425,7 @@ public final class StringBuiltins extends PythonBuiltins {
+@@ -1418,6 +1426,7 @@ public final class StringBuiltins extends PythonBuiltins {
               */
              PList list = PFactory.createList(PythonLanguage.get(inliningTarget));
              int length = codePointLengthNode.execute(s, TS_ENCODING);
@@ -1008,7 +1011,7 @@ index 978671e..8527779 100644
  
              int maxsplit2 = maxsplit;
              if (maxsplit2 < 0) {
-@@ -1701,6 +1709,7 @@ public final class StringBuiltins extends PythonBuiltins {
+@@ -1701,6 +1710,7 @@ public final class StringBuiltins extends PythonBuiltins {
          int cpStart = adjustStartIndex(start, cpLen);
          int cpEnd = adjustEndIndex(end, cpLen);
          if (cpStart < cpEnd) {
@@ -1016,7 +1019,7 @@ index 978671e..8527779 100644
              return indexOfStringNode.execute(self, sub, cpStart, cpEnd, TS_ENCODING);
          } else if (sub.isEmpty() && cpStart == cpEnd && cpStart <= cpLen) {
              return cpStart;
-@@ -1713,6 +1722,7 @@ public final class StringBuiltins extends PythonBuiltins {
+@@ -1713,6 +1723,7 @@ public final class StringBuiltins extends PythonBuiltins {
          int cpStart = adjustStartIndex(start, cpLen);
          int cpEnd = adjustEndIndex(end, cpLen);
          if (cpStart < cpEnd) {
@@ -1025,7 +1028,7 @@ index 978671e..8527779 100644
          } else if (sub.isEmpty() && cpStart == cpEnd && cpStart <= cpLen) {
              return cpStart;
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/str/StringNodes.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/str/StringNodes.java
-index 7da4308..67c0879 100644
+index 7da4308..bfb41c0 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/str/StringNodes.java
 +++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/objects/str/StringNodes.java
 @@ -409,6 +409,14 @@ public abstract class StringNodes {
@@ -1033,11 +1036,11 @@ index 7da4308..67c0879 100644
      }
  
 +    /**
-+     * Leek Wars : travail d'une fonction de chaine, hors du compteur de statements, au tarif de
-+     * LeekScript : 1 + caracteres / divisor (recherche : 10, split et replace : 1).
++     * Leek Wars : un caractere decoupe ou remplace, hors du compteur de statements, au tarif de split et
++     * replace en LeekScript (1 + 1 par caractere). Recherche : PythonContext.lwChargeSearch.
 +     */
-+    public static void lwChargeChars(TruffleString s, int divisor) { // divisor : 10 = lwChargeSearch
-+        PythonContext.lwChargeCurrent(1 + (s.byteLength(TS_ENCODING) >> 2) / divisor);
++    public static void lwChargeChars(TruffleString s) {
++        PythonContext.lwChargeCurrent(1 + (s.byteLength(TS_ENCODING) >> 2));
 +    }
 +
      @ImportStatic({PGuards.class, PythonOptions.class})
@@ -1055,7 +1058,7 @@ index 7da4308..67c0879 100644
              if (maxCount == 0) {
                  return self;
              }
-+            lwChargeChars(self, 1); // Leek Wars : comme replace en LeekScript
++            lwChargeChars(self); // Leek Wars : comme replace en LeekScript
              if (old.isEmpty()) {
                  if (self.isEmpty() && maxCountArg >= 0) {
                      // corner case: "".replace("","x", <m>) returns "x" for m >=0

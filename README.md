@@ -94,7 +94,7 @@ exécuter des binaires depuis l'arbre de build :
   élément parcouru ou comparé par une recherche ou une comparaison de listes, tuples, `deque` et
   `array` (`in`, `index`, `count`, `remove`, `==`, `<`), converti par `repr` ou joint par `str.join` ;
   une recherche dans une chaîne ou des bytes (`find`, `in`, `count`, `partition`) compte 1 + 1 par 10
-  caractères (jamais moins de 1 : `lwCharge` ignore un montant négatif), `split` et `replace` 1 par
+  caractères (`lwChargeSearch` ; `lwCharge` ignore tout montant négatif), `split` et `replace` 1 par
   caractère, au tarif de LeekScript. Une copie (`list(l)`, `l + l`, `d.copy()`) ne calcule rien et
   ne compte pas. La boucle `for` du bytecode, déjà comptée
   par l'instrument, rend le sien. Ces opérations s'ajoutent au compteur de l'instrument, que le
