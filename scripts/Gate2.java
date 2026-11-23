@@ -258,6 +258,8 @@ public class Gate2 {
             // rien de plus pour une boucle deja comptee par l'instrument, plafond du tour leve en RuntimeError
             String ops = "(lambda g: (g.lw_native_ops(0), %s, g.lw_native_ops())[2])(__import__('__graalpython__'))";
             if (!returnsFast(engine, "python", ops.formatted("sum(map(abs, range(1000)))"), "2000")) failures++;
+            if (!returnsFast(engine, "python", "(lambda g, l: (g.lw_native_ops(0), l.sort(), g.lw_native_ops())[2])(__import__('__graalpython__'), list(range(1000)))", "1000")) failures++;
+            if (!returnsFast(engine, "python", "hasattr(__import__('__graalpython__'), 'time_millis')", "false")) failures++;
             if (!returnsFast(engine, "python", "(lambda g, d: (g.lw_native_ops(0), [x for x in d], g.lw_native_ops())[2])(__import__('__graalpython__'), dict.fromkeys(range(1000)))", "0")) failures++;
             if (!refusedFast(engine, "python", "(lambda g: (g.lw_native_ops(0, 100), sum(map(abs, range(1000))))[1])(__import__('__graalpython__'))",
                             "operation limit reached in Leek Wars")) failures++;

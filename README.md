@@ -89,9 +89,10 @@ exécuter des binaires depuis l'arbre de build :
   Opérations natives (`PythonContext.lwCharge`) : les éléments que les builtins parcourent en Java
   échappent au compteur de statements (`sum(map(float.__mul__, a, b))`, ensembles, `dict.update`).
   Chaque élément rendu par un itérateur natif (`CallSlotTpIterNextNode` : map, zip, enumerate, dict,
-  set...), par les boucles rapides de `sum` ou par les opérations en masse sur les dict et ensembles
-  (`HashingStorageForEach`, `dict.update`, copie) compte 1. La boucle `for` du bytecode, déjà comptée
-  par l'instrument, rend le sien. `__graalpython__.lw_native_ops(reset, plafond)` lit et remet à zéro
+  set...), par les boucles rapides de `sum`, par les opérations en masse sur les dict et ensembles
+  (`HashingStorageForEach`, `dict.update`) ou trié (`list.sort`, `sorted`) compte 1 ; une copie
+  (`list(l)`, `d.copy()`) ne calcule rien et ne compte pas. La boucle `for` du bytecode, déjà comptée
+  par l'instrument, rend le sien. `__graalpython__.time_millis` (heure réelle) est retiré. `__graalpython__.lw_native_ops(reset, plafond)` lit et remet à zéro
   le compte ; au-delà du plafond, chaque opération native lève `RuntimeError: operation limit reached
   in Leek Wars`. Le générateur ajoute ce compte à `System.operations` (Gate2 [7] le vérifie).
 - `src/com.leekwars.truffle.instrument/` — l'instrument (copié dans l'arbre graaljs au build).
