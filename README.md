@@ -96,9 +96,11 @@ exécuter des binaires depuis l'arbre de build :
   générateur confie au contexte par `__graalpython__.lw_set_operations` (un seul compteur, une seule
   limite). `__graalpython__.time_millis` (heure réelle) est retiré.
 - `src/com.leekwars.truffle.instrument/` — l'instrument (copié dans l'arbre graaljs au build). Son
-  compteur a une limite par tour (`execute(compte, limite)`) : au-delà, chaque opération comptée lève
-  `operation limit reached in Leek Wars`, et l'erreur revient si le guest l'attrape. Un langage y
-  ajoute ses opérations natives par `LongUnaryOperator.applyAsLong`, interface du JDK qui évite toute
+  compteur tient le budget du tour et les opérations de l'hôte (`execute("turn", budget, facteur,
+  hôte)`, `execute("host", hôte)`, cf la javadoc de `StatementCounter`) : au-delà, chaque opération
+  comptée lève `operation limit reached in Leek Wars`, et l'erreur revient si le guest l'attrape. Le
+  guest ne voit que `lwOperations`, un lecteur du total. Un langage ajoute ses opérations natives dans
+  la cellule {compte, limite} du compteur, obtenue par `Supplier.get`, interface du JDK qui évite toute
   dépendance à l'instrument.
 - `scripts/Gate2.java` — harnais de validation (instrument listé, binding lisible,
   déterminisme, coûts, mémoire retenue lue par l'hôte et depuis un appel guest → hôte).

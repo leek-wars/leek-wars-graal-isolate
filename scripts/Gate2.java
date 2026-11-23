@@ -290,9 +290,7 @@ public class Gate2 {
             try (Context ctx = Context.newBuilder("js").engine(engine).build()) {
                 Value counter = ctx.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
                 for (String code : new String[] { "for (;;) {}", "try { for (;;) {} } catch (e) { for (;;) {} }" }) {
-                    boolean reached = limitReached(ctx, counter, "js", code, 0);
-                    System.out.println("[7 js] " + (reached ? "OK" : "KO") + ": limite : " + code);
-                    if (!reached) failures++;
+                    if (!check("js, limite : " + code, limitReached(ctx, counter, "js", code, 0), true)) failures++;
                 }
             }
             if (!refusedFast(engine, "js", "3n ** 60000000n", "Maximum BigInt size exceeded")) failures++;
