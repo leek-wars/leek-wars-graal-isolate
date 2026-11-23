@@ -254,7 +254,7 @@ public class Gate2 {
             if (!returnsFast(engine, "python", "(lambda l: [l.acquire() for _ in range(3)][-1])(__import__('threading').RLock())", "true")) failures++;
             if (!returnsFast(engine, "python", "(lambda q: (q.put(7), q.get(True, 5))[1])(__import__('_queue').SimpleQueue())", "7")) failures++;
             if (!returnsFast(engine, "python", "(lambda e: (e.set(), e.wait(5))[1])(__import__('threading').Event())", "true")) failures++;
-            // [9] operations natives (PythonContext.lwCharge) : un element par niveau d'iterateur natif,
+            // [7] operations natives (PythonContext.lwCharge) : un element par niveau d'iterateur natif,
             // rien de plus pour une boucle deja comptee par l'instrument, plafond du tour leve en RuntimeError
             String ops = "(lambda g: (g.lw_native_ops(0), %s, g.lw_native_ops())[2])(__import__('__graalpython__'))";
             if (!returnsFast(engine, "python", ops.formatted("sum(map(abs, range(1000)))"), "2000")) failures++;
