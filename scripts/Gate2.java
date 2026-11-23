@@ -60,6 +60,63 @@ public class Gate2 {
         }
     }
 
+    /**
+     * [7] un seul compteur : les elements que GraalPy parcourt ou trie en Java s'ajoutent au compteur de
+     * l'instrument qu'on lui confie (__graalpython__.lw_set_operations), un par niveau d'iterateur natif,
+     * rien de plus pour une boucle deja comptee ; au-dela de la limite, statements comme natif levent
+     * l'erreur de l'instrument.
+     */
+    static boolean nativeOperations(Engine engine) {
+        boolean ok = true;
+        try (Context ctx = Context.newBuilder("python").engine(engine).build()) {
+            Value counter = ctx.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
+            Value set = ctx.eval("python", "__import__('__graalpython__').lw_set_operations");
+            ctx.eval("python", "l = list(range(1000)); d = dict.fromkeys(l)");
+            ok &= check("compteur accepte", set.execute(counter).asBoolean(), true);
+            ok &= check("natif de sum(map(abs, l))", nativePart(ctx, counter, set, "sum(map(abs, l))"), 2000L);
+            ok &= check("natif de l.sort()", nativePart(ctx, counter, set, "l.sort()"), 1000L);
+            ok &= check("natif d'un for sur un dict", nativePart(ctx, counter, set, "[x for x in d]"), 0L);
+            for (String code : new String[] { "sum(map(abs, l * 100))", "while True: pass", "try:\n    while True: pass\nexcept BaseException:\n    while True: pass" }) {
+                ok &= check("limite : " + code.replace("\n", " "), limitReached(ctx, counter, "python", code), true);
+            }
+        }
+        return ok;
+    }
+
+    /** Vrai si code s'arrete sur l'erreur de l'instrument, une fois la limite posee a 5000 operations. */
+    static boolean limitReached(Context ctx, Value counter, String lang, String code) {
+        counter.execute(0, 5000);
+        try {
+            ctx.eval(lang, code);
+            return false;
+        } catch (PolyglotException e) {
+            return String.valueOf(e.getMessage()).contains(StatementCounter.LIMIT_MESSAGE);
+        }
+    }
+
+    /** Operations natives de code : compte avec le compteur confie a GraalPy, moins sans. */
+    static long nativePart(Context ctx, Value counter, Value set, String code) {
+        set.execute(counter);
+        long with = countPython(ctx, counter, code);
+        set.execute((Object) null);
+        long without = countPython(ctx, counter, code);
+        set.execute(counter);
+        return with - without;
+    }
+
+    /** Operations comptees pendant code Python (compteur remis a zero, sans limite). */
+    static long countPython(Context ctx, Value counter, String code) {
+        counter.execute(0, Long.MAX_VALUE);
+        ctx.eval("python", code);
+        return counter.execute().asLong();
+    }
+
+    static boolean check(String what, Object value, Object expected) {
+        boolean ok = String.valueOf(value).equals(String.valueOf(expected));
+        System.out.println("[7 python] " + (ok ? "OK" : "KO") + ": " + what + " -> " + value + (ok ? "" : " (attendu " + expected + ")"));
+        return ok;
+    }
+
     static Engine newIsolateEngine(String lang, boolean withCounter) {
         Engine.Builder b = Engine.newBuilder(lang)
                 .allowExperimentalOptions(true)
@@ -219,6 +276,15 @@ public class Gate2 {
 
         // [7] [8] plafonds des entiers et boucles natives interruptibles (patches Leek Wars)
         try (Engine engine = newIsolateEngine("js", true)) {
+            // [7] limite de l'instrument : en JS aussi, la boucle s'arrete, meme attrapee
+            try (Context ctx = Context.newBuilder("js").engine(engine).build()) {
+                Value counter = ctx.getPolyglotBindings().getMember(StatementCounter.BINDING_NAME);
+                for (String code : new String[] { "for (;;) {}", "try { for (;;) {} } catch (e) { for (;;) {} }" }) {
+                    boolean reached = limitReached(ctx, counter, "js", code);
+                    System.out.println("[7 js] " + (reached ? "OK" : "KO") + ": limite : " + code);
+                    if (!reached) failures++;
+                }
+            }
             if (!refusedFast(engine, "js", "3n ** 60000000n", "Maximum BigInt size exceeded")) failures++;
             if (!refusedFast(engine, "js", "1n << 100000000n", "Maximum BigInt size exceeded")) failures++;
             if (!refusedFast(engine, "js", "BigInt('9'.repeat(5000000))", "Maximum BigInt size exceeded")) failures++;
@@ -254,15 +320,9 @@ public class Gate2 {
             if (!returnsFast(engine, "python", "(lambda l: [l.acquire() for _ in range(3)][-1])(__import__('threading').RLock())", "true")) failures++;
             if (!returnsFast(engine, "python", "(lambda q: (q.put(7), q.get(True, 5))[1])(__import__('_queue').SimpleQueue())", "7")) failures++;
             if (!returnsFast(engine, "python", "(lambda e: (e.set(), e.wait(5))[1])(__import__('threading').Event())", "true")) failures++;
-            // [7] operations natives (PythonContext.lwCharge) : un element par niveau d'iterateur natif,
-            // rien de plus pour une boucle deja comptee par l'instrument, plafond du tour leve en RuntimeError
-            String ops = "(lambda g: (g.lw_native_ops(0), %s, g.lw_native_ops())[2])(__import__('__graalpython__'))";
-            if (!returnsFast(engine, "python", ops.formatted("sum(map(abs, range(1000)))"), "2000")) failures++;
-            if (!returnsFast(engine, "python", "(lambda g, l: (g.lw_native_ops(0), l.sort(), g.lw_native_ops())[2])(__import__('__graalpython__'), list(range(1000)))", "1000")) failures++;
+            // [7] operations natives (PythonContext.lwCharge) dans le compteur de l'instrument, et sa limite
+            if (!nativeOperations(engine)) failures++;
             if (!returnsFast(engine, "python", "hasattr(__import__('__graalpython__'), 'time_millis')", "false")) failures++;
-            if (!returnsFast(engine, "python", "(lambda g, d: (g.lw_native_ops(0), [x for x in d], g.lw_native_ops())[2])(__import__('__graalpython__'), dict.fromkeys(range(1000)))", "0")) failures++;
-            if (!refusedFast(engine, "python", "(lambda g: (g.lw_native_ops(0, 100), sum(map(abs, range(1000))))[1])(__import__('__graalpython__'))",
-                            "operation limit reached in Leek Wars")) failures++;
         }
 
         System.out.println("=== fin Gate 2 ===");

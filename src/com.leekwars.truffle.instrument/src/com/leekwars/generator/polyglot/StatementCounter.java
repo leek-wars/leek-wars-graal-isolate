@@ -1,6 +1,7 @@
 package com.leekwars.generator.polyglot;
 
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.LongUnaryOperator;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.frame.VirtualFrame;
@@ -17,6 +18,8 @@ import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.nodes.LanguageInfo;
 import com.oracle.truffle.api.ContextLocal;
+import com.oracle.truffle.api.exception.AbstractTruffleException;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.Option;
 import com.oracle.truffle.api.TruffleContext;
 
@@ -69,20 +72,58 @@ public final class StatementCounter extends TruffleInstrument {
 		return new StatementCounterOptionDescriptors();
 	}
 
+	/** Message de l'erreur levee au-dela de la limite, reconnu par le generateur (PolyglotEntityAI). */
+	public static final String LIMIT_MESSAGE = "operation limit reached in Leek Wars";
+
 	/**
-	 * Compteur de statements guest d'un contexte, publie tel quel dans ses polyglot bindings :
-	 * execute() = lire, execute(x) = reset.
+	 * Compteur d'operations d'un contexte, publie tel quel dans ses polyglot bindings : execute() = lire,
+	 * execute(x) = remettre a zero, execute(x, limite) = mettre le compte a x (x &lt; 0 : inchange) et fixer
+	 * la limite. Au-dela de la limite, chaque operation comptee leve {@link LimitReached} : attrapee par
+	 * le guest, l'erreur revient a l'operation suivante.
+	 *
+	 * <p>Un langage y ajoute les operations qu'il fait hors de ses noeuds instrumentes (boucles natives
+	 * de ses builtins) par {@link LongUnaryOperator#applyAsLong}, interface du JDK qu'il connait sans
+	 * dependre de cet instrument : GraalPy recoit l'objet du generateur (cf patches/graalpython.patch).
 	 */
 	@ExportLibrary(InteropLibrary.class)
-	static final class CounterObject implements TruffleObject {
+	static final class CounterObject implements TruffleObject, LongUnaryOperator {
 		long count;
+		long limit = Long.MAX_VALUE;
+
+		/** Ajoute n operations, rend le reste avant la limite (negatif : depassee). */
+		@Override
+		public long applyAsLong(long n) {
+			count += n;
+			return limit - count;
+		}
+
 		@ExportMessage boolean isExecutable() { return true; }
-		@ExportMessage Object execute(Object[] args) {
-			if (args.length > 0) {
+		@ExportMessage @TruffleBoundary Object execute(Object[] args) throws UnsupportedMessageException {
+			if (args.length == 1) {
 				count = 0L;
+			} else if (args.length > 1) {
+				long value = InteropLibrary.getUncached().asLong(args[0]);
+				if (value >= 0) {
+					count = value;
+				}
+				limit = InteropLibrary.getUncached().asLong(args[1]);
 			}
 			return count;
 		}
+	}
+
+	/** Limite d'operations du contexte depassee : visible du guest, comme une erreur du langage. */
+	static final class LimitReached extends AbstractTruffleException {
+		private static final long serialVersionUID = 1L;
+
+		LimitReached(Node location) {
+			super(LIMIT_MESSAGE, location);
+		}
+	}
+
+	@TruffleBoundary
+	private static LimitReached limitReached(Node location) {
+		return new LimitReached(location);
 	}
 
 	/**
@@ -107,7 +148,12 @@ public final class StatementCounter extends TruffleInstrument {
 	@Override
 	protected void onCreate(Env env) {
 		ExecutionEventListener listener = new ExecutionEventListener() {
-			@Override public void onEnter(EventContext context, VirtualFrame frame) { counters.get().count++; }
+			@Override public void onEnter(EventContext context, VirtualFrame frame) {
+				CounterObject counter = counters.get();
+				if (++counter.count > counter.limit) {
+					throw limitReached(context.getInstrumentedNode());
+				}
+			}
 			@Override public void onReturnValue(EventContext context, VirtualFrame frame, Object result) {}
 			@Override public void onReturnExceptional(EventContext context, VirtualFrame frame, Throwable exception) {}
 		};

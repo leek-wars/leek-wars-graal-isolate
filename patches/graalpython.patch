@@ -102,10 +102,18 @@ index 6c287f8..014067d 100644
                  }
                  return result;
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/GraalPythonModuleBuiltins.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/GraalPythonModuleBuiltins.java
-index 81bb52d..0eb299f 100644
+index 81bb52d..f85c93c 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/GraalPythonModuleBuiltins.java
 +++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/builtins/modules/GraalPythonModuleBuiltins.java
-@@ -975,13 +975,26 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
+@@ -75,6 +75,7 @@ import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
+ import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
+ import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
+ 
++import java.util.function.LongUnaryOperator;
+ import java.io.IOException;
+ import java.io.InputStreamReader;
+ import java.io.PrintWriter;
+@@ -975,13 +976,19 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
          }
      }
  
@@ -113,27 +121,20 @@ index 81bb52d..0eb299f 100644
 +    // Leek Wars : time_millis retire, l'heure reelle d'un module que le joueur peut importer (un combat
 +    // doit se rejouer a l'identique).
 +
-+    // Leek Wars : operations natives du contexte (cf PythonContext.lwNativeOps). lw_native_ops() les
-+    // lit ; lw_native_ops(0, plafond) les remet a zero et fixe le plafond du tour. Le prelude du
-+    // generateur la capture puis la retire du module.
-+    @Builtin(name = "lw_native_ops", minNumOfPositionalArgs = 0, maxNumOfPositionalArgs = 2)
++    // Leek Wars : lw_set_operations(compteur) branche le compteur d'operations de l'instrument (cf
++    // PythonContext.lwOps), vrai s'il est accepte. Le prelude du generateur la capture puis la retire.
++    @Builtin(name = "lw_set_operations", minNumOfPositionalArgs = 1)
      @GenerateNodeFactory
 -    public abstract static class TimeMillis extends PythonUnaryBuiltinNode {
-+    public abstract static class LwNativeOps extends PythonBinaryBuiltinNode {
++    public abstract static class LwSetOperations extends PythonUnaryBuiltinNode {
          @Specialization
 -        @TruffleBoundary
 -        static long doIt(@SuppressWarnings("unused") Object dummy) {
 -            return System.currentTimeMillis();
-+        static long doIt(Object reset, Object limit,
++        static boolean doIt(Object counter,
 +                        @Bind PythonContext context) {
-+            long count = context.lwNativeOps;
-+            if (reset instanceof Long || reset instanceof Integer) {
-+                context.lwNativeOps = ((Number) reset).longValue();
-+            }
-+            if (limit instanceof Long || limit instanceof Integer) {
-+                context.lwNativeOpsLimit = ((Number) limit).longValue();
-+            }
-+            return count;
++            context.lwOps = counter instanceof LongUnaryOperator ops ? ops : null;
++            return context.lwOps != null;
          }
      }
  
@@ -963,7 +964,7 @@ index 363f4d9..464ad0c 100644
              BigInteger bi;
              if (sign == '-') {
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java
-index f9fc7cb..6e587f3 100644
+index f9fc7cb..4b048a0 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java
 +++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/nodes/bytecode_dsl/PBytecodeDSLRootNode.java
 @@ -58,7 +58,9 @@ import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
@@ -1023,7 +1024,7 @@ index f9fc7cb..6e587f3 100644
 +                // Leek Wars : l'iteration d'une boucle for est deja comptee par l'instrument ; un iterateur
 +                // natif l'a comptee en plus (TpSlotIterNext.CallSlotTpIterNextNode), on la rend.
 +                if (context.lwNativeOps > counted) {
-+                    context.lwNativeOps--;
++                    context.lwRefund();
 +                }
                  output.setObject(bytecode, frame, value);
                  return true;
@@ -1100,10 +1101,15 @@ index 1e1b092..1c3bec4 100644
              return new Buffer(PythonUtils.EMPTY_BYTE_ARRAY, 0);
          } else {
 diff --git a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/PythonContext.java b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/PythonContext.java
-index 783e569..c771a03 100644
+index 783e569..7d22237 100644
 --- a/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/PythonContext.java
 +++ b/graalpython/com.oracle.graal.python/src/com/oracle/graal/python/runtime/PythonContext.java
-@@ -100,6 +100,7 @@ import java.util.logging.Level;
+@@ -96,10 +96,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.concurrent.atomic.AtomicInteger;
+ import java.util.concurrent.atomic.AtomicLong;
+ import java.util.concurrent.locks.ReentrantLock;
++import java.util.function.LongUnaryOperator;
+ import java.util.logging.Level;
  
  import org.graalvm.options.OptionKey;
  
@@ -1111,7 +1117,7 @@ index 783e569..c771a03 100644
  import com.oracle.graal.python.PythonLanguage;
  import com.oracle.graal.python.annotations.PythonOS;
  import com.oracle.graal.python.builtins.Python3Core;
-@@ -156,6 +157,7 @@ import com.oracle.graal.python.runtime.PythonContextFactory.GetThreadStateNodeGe
+@@ -156,6 +158,7 @@ import com.oracle.graal.python.runtime.PythonContextFactory.GetThreadStateNodeGe
  import com.oracle.graal.python.runtime.arrow.ArrowSupport;
  import com.oracle.graal.python.runtime.exception.ExceptionUtils;
  import com.oracle.graal.python.runtime.exception.PException;
@@ -1119,30 +1125,50 @@ index 783e569..c771a03 100644
  import com.oracle.graal.python.runtime.exception.PythonExitException;
  import com.oracle.graal.python.runtime.exception.PythonThreadKillException;
  import com.oracle.graal.python.runtime.locale.PythonLocale;
-@@ -745,6 +747,33 @@ public final class PythonContext extends Python3Core {
+@@ -745,6 +748,53 @@ public final class PythonContext extends Python3Core {
      private static final String J_NO_CAPI = "could not determine Graal.Python's C API library path. You need to pass --python.CAPI if you want to use the C extension modules.";
  
      private PythonModule mainModule;
 +    /**
-+     * Leek Wars : elements parcourus par les boucles Java des builtins (iterateurs consommes en Java,
-+     * sum, ensembles et dict en masse), que le compteur de statements de l'instrument ne voit pas.
-+     * Lu et remis a zero par {@code __graalpython__.lw_native_ops}, qui fixe aussi le plafond du tour.
-+     * Un contexte n'a qu'un fil.
++     * Leek Wars : compteur d'operations du contexte, celui de l'instrument lw-statement-counter (statements
++     * et expressions), recu du generateur par {@code __graalpython__.lw_set_operations}. On y ajoute les
++     * elements que les boucles Java des builtins parcourent ou trient (iterateurs natifs, sum, ensembles,
++     * dict), que l'instrument ne voit pas. null hors Leek Wars : rien n'est compte. Un contexte n'a qu'un fil.
 +     */
++    public LongUnaryOperator lwOps;
++    /** Operations natives ajoutees par ce contexte, cf PBytecodeDSLRootNode.ForIterate. */
 +    public long lwNativeOps;
-+    public long lwNativeOpsLimit = Long.MAX_VALUE;
-+    /** Message reconnu par le generateur (PolyglotEntityAI), a garder identique des deux cotes. */
++    /** Message de l'instrument au-dela de sa limite, reconnu par le generateur (PolyglotEntityAI). */
 +    private static final TruffleString LW_OPS_EXHAUSTED = tsLiteral("operation limit reached in Leek Wars");
 +
 +    /**
-+     * Leek Wars : compte n operations natives. Au-dela du plafond, chacune leve l'erreur : attrapee par
-+     * l'IA, elle revient a l'operation native suivante.
++     * Leek Wars : compte n operations natives. Au-dela de la limite du compteur, chacune leve l'erreur :
++     * attrapee par l'IA, elle revient a l'operation native suivante.
 +     */
 +    public void lwCharge(long n) {
 +        lwNativeOps += n;
-+        if (lwNativeOps > lwNativeOpsLimit) {
++        LongUnaryOperator ops = lwOps;
++        if (ops != null && lwApply(ops, n) < 0) {
 +            throw lwOpsExhausted();
 +        }
++    }
++
++    /** Leek Wars : rend une operation native deja comptee par l'instrument (cf ForIterate). */
++    public void lwRefund() {
++        lwNativeOps--;
++        LongUnaryOperator ops = lwOps;
++        if (ops != null) {
++            lwApply(ops, -1);
++        }
++    }
++
++    /**
++     * Hors compilation : une interface du JDK appelee depuis du code compile rendrait atteignables toutes
++     * ses implementations, dont des methodes interdites a la compilation runtime (native-image refuse).
++     */
++    @TruffleBoundary
++    private static long lwApply(LongUnaryOperator ops, long n) {
++        return ops.applyAsLong(n);
 +    }
 +
 +    @TruffleBoundary
@@ -1153,7 +1179,7 @@ index 783e569..c771a03 100644
      private final List<ShutdownHook> shutdownHooks = new ArrayList<>();
      private final List<AtExitHook> atExitHooks = new ArrayList<>();
      private final List<Object> auditHooks = new ArrayList<>();
-@@ -1118,6 +1147,9 @@ public final class PythonContext extends Python3Core {
+@@ -1118,6 +1168,9 @@ public final class PythonContext extends Python3Core {
                  noFDHandler.run();
                  throw CompilerDirectives.shouldNotReachHere();
              }

@@ -87,15 +87,19 @@ exécuter des binaires depuis l'arbre de build :
   que le générateur affiche au joueur sous un code d'erreur dédié. Leur chemin sans attente
   est inchangé.
   Opérations natives (`PythonContext.lwCharge`) : les éléments que les builtins parcourent en Java
-  échappent au compteur de statements (`sum(map(float.__mul__, a, b))`, ensembles, `dict.update`).
-  Chaque élément rendu par un itérateur natif (`CallSlotTpIterNextNode` : map, zip, enumerate, dict,
-  set...), par les boucles rapides de `sum`, par les opérations en masse sur les dict et ensembles
+  échappent à l'instrument (`sum(map(float.__mul__, a, b))`, ensembles, `dict.update`). Chaque élément
+  rendu par un itérateur natif (`CallSlotTpIterNextNode` : map, zip, enumerate, dict, set...), par les
+  boucles rapides de `sum`, par les opérations en masse sur les dict et ensembles
   (`HashingStorageForEach`, `dict.update`) ou trié (`list.sort`, `sorted`) compte 1 ; une copie
   (`list(l)`, `d.copy()`) ne calcule rien et ne compte pas. La boucle `for` du bytecode, déjà comptée
-  par l'instrument, rend le sien. `__graalpython__.time_millis` (heure réelle) est retiré. `__graalpython__.lw_native_ops(reset, plafond)` lit et remet à zéro
-  le compte ; au-delà du plafond, chaque opération native lève `RuntimeError: operation limit reached
-  in Leek Wars`. Le générateur ajoute ce compte à `System.operations` (Gate2 [7] le vérifie).
-- `src/com.leekwars.truffle.instrument/` — l'instrument (copié dans l'arbre graaljs au build).
+  par l'instrument, rend le sien. Ces opérations s'ajoutent au compteur de l'instrument, que le
+  générateur confie au contexte par `__graalpython__.lw_set_operations` (un seul compteur, une seule
+  limite). `__graalpython__.time_millis` (heure réelle) est retiré.
+- `src/com.leekwars.truffle.instrument/` — l'instrument (copié dans l'arbre graaljs au build). Son
+  compteur a une limite par tour (`execute(compte, limite)`) : au-delà, chaque opération comptée lève
+  `operation limit reached in Leek Wars`, et l'erreur revient si le guest l'attrape. Un langage y
+  ajoute ses opérations natives par `LongUnaryOperator.applyAsLong`, interface du JDK qui évite toute
+  dépendance à l'instrument.
 - `scripts/Gate2.java` — harnais de validation (instrument listé, binding lisible,
   déterminisme, coûts, mémoire retenue lue par l'hôte et depuis un appel guest → hôte).
 - `scripts/Gate3Prod.java` — harnais config PROD (`SandboxPolicy.ISOLATED` + cascade
